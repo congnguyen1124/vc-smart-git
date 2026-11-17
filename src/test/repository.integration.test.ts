@@ -17,6 +17,13 @@ test('GitRepository completes local change, history, and conflict workflows', as
     await repository.stageAll();
     await repository.commit('Initial commit', false);
 
+    const initialBlame = await repository.blame('shared.txt', 'base\n');
+    assert.equal(initialBlame[0]?.author, 'VC Smart Git Test');
+    assert.equal(initialBlame[0]?.summary, 'Initial commit');
+    const modifiedBlame = await repository.blame('shared.txt', 'not committed\n');
+    assert.equal(modifiedBlame[0]?.uncommitted, true);
+    assert.equal(modifiedBlame[0]?.content, 'not committed');
+
     await writeFile(path.join(root, 'shared.txt'), 'working tree\n');
     await writeFile(path.join(root, 'untracked.txt'), 'new\n');
     let status = await repository.status();

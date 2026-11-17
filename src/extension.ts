@@ -1,17 +1,20 @@
 import * as vscode from 'vscode';
 import { SmartGitViewProvider } from './webview/provider';
 import { GitContentProvider } from './vscode/diffProvider';
+import { GitBlameController } from './vscode/blameController';
 import { observeBuiltInGit } from './vscode/repositoryDiscovery';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('VC Smart Git', { log: true });
   const contentProvider = new GitContentProvider();
   const provider = new SmartGitViewProvider(context, contentProvider, output);
+  const blameController = new GitBlameController(output);
 
   context.subscriptions.push(
     output,
     contentProvider,
     provider,
+    blameController,
     vscode.workspace.registerTextDocumentContentProvider('vc-smart-git', contentProvider),
     vscode.window.registerWebviewViewProvider('vcSmartGit.toolWindow', provider, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -29,6 +32,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('vcSmartGit.unstageAll', () => provider.runAction('unstageAll')),
     vscode.commands.registerCommand('vcSmartGit.continueOperation', () => provider.runAction('continueOperation')),
     vscode.commands.registerCommand('vcSmartGit.abortOperation', () => provider.runAction('abortOperation')),
+    vscode.commands.registerCommand('vcSmartGit.annotateBlame', () => blameController.annotateActive()),
+    vscode.commands.registerCommand('vcSmartGit.hideBlame', () => blameController.hideActive()),
     vscode.workspace.onDidSaveTextDocument(() => provider.scheduleRefresh()),
     vscode.workspace.onDidCreateFiles(() => provider.scheduleRefresh()),
     vscode.workspace.onDidDeleteFiles(() => provider.scheduleRefresh()),

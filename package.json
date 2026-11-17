@@ -2,7 +2,7 @@
   "name": "vc-smart-git",
   "displayName": "VC Smart Git",
   "description": "A JetBrains-inspired Git tool window for Visual Studio Code.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "publisher": "hopemachine",
   "license": "MIT",
   "repository": {
@@ -66,6 +66,16 @@
       {
         "command": "vcSmartGit.continueOperation",
         "title": "VC Smart Git: Continue Current Git Operation"
+      },
+      {
+        "command": "vcSmartGit.annotateBlame",
+        "title": "Annotate with Git Blame",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.hideBlame",
+        "title": "Hide Git Blame Annotations",
+        "category": "VC Smart Git"
       }
     ],
     "viewsContainers": {
@@ -97,6 +107,28 @@
           "command": "vcSmartGit.refresh",
           "when": "view == vcSmartGit.toolWindow",
           "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "vcSmartGit.annotateBlame",
+          "when": "editorTextFocus && resourceScheme == file && !vcSmartGit.blameVisible",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vcSmartGit.hideBlame",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vcSmartGit.annotateBlame",
+          "when": "resourceScheme == file && !vcSmartGit.blameVisible"
+        },
+        {
+          "command": "vcSmartGit.hideBlame",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible"
         }
       ]
     },

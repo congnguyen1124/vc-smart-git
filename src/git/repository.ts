@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process';
 import { access } from 'node:fs/promises';
-import path from 'node:path';
+import * as path from 'node:path';
+import { parseBlamePorcelain } from './blame';
 import { parseBranches, parseLog, parsePorcelainV2 } from './parsers';
+import type { GitBlameLine } from './blame';
 import type { GitBranch, GitCommit, GitCommitFile, GitOperation, GitStatus } from './types';
 
 interface RunOptions {
   allowFailure?: boolean;
   env?: NodeJS.ProcessEnv;
+  input?: string;
 }
 
 interface CommandResult {
@@ -64,7 +67,7 @@ export class GitRepository {
 
   public run(args: readonly string[], options: RunOptions = {}): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         this.gitPath,
         ['-C', this.root, ...args],
         {
@@ -86,6 +89,9 @@ export class GitRepository {
           }
         },
       );
+      if (options.input !== undefined) {
+        child.stdin?.end(options.input);
+      }
     });
   }
 
@@ -99,6 +105,16 @@ export class GitRepository {
       '-z',
     ]);
     return parsePorcelainV2(result.stdout);
+  }
+
+  public async blame(filePath: string, contents?: string): Promise<GitBlameLine[]> {
+    const args = ['blame', '--line-porcelain'];
+    if (contents !== undefined) {
+      args.push('--contents', '-');
+    }
+    args.push('--', filePath);
+    const result = await this.run(args, { ...(contents !== undefined ? { input: contents } : {}) });
+    return parseBlamePorcelain(result.stdout);
   }
 
   public async log(limit: number): Promise<GitCommit[]> {
