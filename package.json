@@ -1,0 +1,150 @@
+{
+  "name": "vc-smart-git",
+  "displayName": "VC Smart Git",
+  "description": "A JetBrains-inspired Git tool window for Visual Studio Code.",
+  "version": "0.4.2",
+  "publisher": "hopemachine",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/congnguyen1124/vc-smart-git.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "scm",
+    "jetbrains",
+    "conflict",
+    "merge"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vcSmartGit.open",
+        "title": "VC Smart Git: Open Git Tool Window",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "vcSmartGit.refresh",
+        "title": "VC Smart Git: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vcSmartGit.fetch",
+        "title": "VC Smart Git: Fetch All Remotes",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "vcSmartGit.pull",
+        "title": "VC Smart Git: Pull (Fast-forward Only)",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "vcSmartGit.push",
+        "title": "VC Smart Git: Push",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "vcSmartGit.stageAll",
+        "title": "VC Smart Git: Stage All Changes"
+      },
+      {
+        "command": "vcSmartGit.unstageAll",
+        "title": "VC Smart Git: Unstage All Changes"
+      },
+      {
+        "command": "vcSmartGit.abortOperation",
+        "title": "VC Smart Git: Abort Current Git Operation"
+      },
+      {
+        "command": "vcSmartGit.continueOperation",
+        "title": "VC Smart Git: Continue Current Git Operation"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "vcSmartGit",
+          "title": "Git",
+          "icon": "resources/git-tool.svg"
+        }
+      ]
+    },
+    "views": {
+      "vcSmartGit": [
+        {
+          "id": "vcSmartGit.toolWindow",
+          "name": "VC Smart Git",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "vcSmartGit.fetch",
+          "when": "view == vcSmartGit.toolWindow",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vcSmartGit.refresh",
+          "when": "view == vcSmartGit.toolWindow",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VC Smart Git",
+      "properties": {
+        "vcSmartGit.gitPath": {
+          "type": "string",
+          "default": "git",
+          "description": "Path to the Git executable. Restart the extension after changing it."
+        },
+        "vcSmartGit.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the tool window when files, editors, or repository state change."
+        },
+        "vcSmartGit.logLimit": {
+          "type": "number",
+          "default": 200,
+          "minimum": 25,
+          "maximum": 2000,
+          "description": "Maximum number of commits loaded in the Log tab."
+        },
+        "vcSmartGit.confirmDestructiveActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before discarding changes, deleting branches, or aborting a Git operation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "compile": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "watch": "tsc -w -p tsconfig.json",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "package": "npm run check && npm test && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "@azure/msal-node": "^7.2.2",
+    "glob": "^14.0.2",
+    "minimatch": "^11.0.1"
+  }
+}
