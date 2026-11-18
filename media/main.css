@@ -248,7 +248,7 @@ select, input, textarea {
   gap: 7px;
   min-height: 25px;
   margin: 0 4px;
-  padding: 2px 8px 2px 24px;
+  padding: 2px 8px 2px var(--branch-indent, 20px);
   border-radius: 3px;
   cursor: pointer;
 }
@@ -256,6 +256,21 @@ select, input, textarea {
 .branch-row.current { color: var(--vscode-textLink-foreground); font-weight: 600; }
 .branch-icon { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .branch-tracking { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.branch-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 25px;
+  margin: 0 4px;
+  padding: 2px 8px 2px var(--branch-indent, 7px);
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.branch-folder-row:hover { background: var(--vscode-list-hoverBackground); }
+.branch-folder-row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.branch-folder-row .chevron-icon { width: 9px; height: 9px; flex-basis: 9px; -webkit-mask-size: 8px 8px; mask-size: 8px 8px; }
+.branch-folder-icon { color: var(--vscode-descriptionForeground); }
 
 .history-pane { border-right: 1px solid var(--vscode-panel-border); }
 .history-toolbar .filter { width: min(320px, 45%); }
@@ -263,7 +278,7 @@ select, input, textarea {
 .filter-chip .chevron-icon { width: 9px; height: 9px; flex-basis: 9px; -webkit-mask-size: 8px 8px; mask-size: 8px 8px; }
 .log-columns {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(110px, .45fr) minmax(100px, .35fr) 135px;
+  grid-template-columns: minmax(calc(210px + var(--graph-width, 30px)), 1fr) minmax(125px, .45fr) minmax(110px, .35fr) 145px;
   min-height: 23px;
   padding: 3px 8px 3px 34px;
   border-bottom: 1px solid var(--vscode-panel-border);
@@ -273,7 +288,7 @@ select, input, textarea {
 .log-list { height: calc(100% - 57px); overflow: auto; }
 .commit-row {
   display: grid;
-  grid-template-columns: 28px minmax(210px, 1fr) minmax(110px, .45fr) minmax(100px, .35fr) 135px;
+  grid-template-columns: var(--graph-width, 30px) minmax(180px, 1fr) minmax(125px, .45fr) minmax(110px, .35fr) 145px;
   align-items: center;
   min-height: 29px;
   padding: 1px 8px;
@@ -281,13 +296,20 @@ select, input, textarea {
 }
 .commit-row:hover { background: var(--vscode-list-hoverBackground); }
 .commit-row.selected { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
-.graph-cell { position: relative; align-self: stretch; }
-.graph-cell::before { position: absolute; top: 0; bottom: 0; left: 10px; width: 2px; content: ''; background: var(--vscode-charts-purple, #8b6bbd); }
-.graph-dot { position: absolute; z-index: 1; top: 50%; left: 5px; width: 12px; height: 12px; border: 2px solid var(--vscode-charts-purple, #8b6bbd); border-radius: 50%; background: var(--vscode-panel-background); transform: translateY(-50%); }
-.commit-row:first-child .graph-cell::before { top: 50%; }
+.graph-cell { min-width: 0; align-self: stretch; overflow: hidden; }
+.graph-svg { display: block; width: 100%; height: 100%; min-height: 29px; overflow: visible; }
+.graph-line { fill: none; stroke-width: 2; stroke-linecap: round; }
+.graph-line.parent-line { stroke-width: 2.2; }
+.graph-node { stroke-width: 1.5; }
+.graph-node.merge { stroke-width: 2.5; }
 .commit-subject, .commit-author, .commit-date { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .commit-refs { overflow: hidden; white-space: nowrap; }
-.ref { display: inline-block; margin-right: 3px; padding: 0 5px; border: 1px solid var(--vscode-badge-background); border-radius: 8px; color: var(--vscode-badge-foreground); background: var(--vscode-badge-background); font-size: 10px; }
+.ref { display: inline-flex; align-items: center; gap: 3px; max-width: 170px; margin-right: 4px; padding: 0 5px 0 3px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 65%, transparent); border-radius: 8px; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 12%, transparent); font-size: 10px; text-overflow: ellipsis; vertical-align: middle; }
+.ref-icon { color: var(--vscode-charts-purple, #a277ff); font-size: 11px; }
+.ref.head, .ref.branch { border-color: color-mix(in srgb, var(--vscode-charts-green, #62c29b) 70%, transparent); background: color-mix(in srgb, var(--vscode-charts-green, #62c29b) 12%, transparent); }
+.ref.head .ref-icon, .ref.branch .ref-icon { color: var(--vscode-charts-green, #62c29b); }
+.ref.tag { border-color: color-mix(in srgb, var(--vscode-charts-yellow, #d7ba7d) 70%, transparent); background: color-mix(in srgb, var(--vscode-charts-yellow, #d7ba7d) 12%, transparent); }
+.ref.tag .ref-icon { color: var(--vscode-charts-yellow, #d7ba7d); }
 .commit-author { font-weight: 600; }
 .commit-date { color: var(--vscode-descriptionForeground); }
 
@@ -337,6 +359,9 @@ select, input, textarea {
   box-shadow: 0 4px 16px var(--vscode-widget-shadow);
 }
 .context-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
   width: 100%;
   min-height: 25px;
   padding: 3px 10px;
@@ -346,6 +371,9 @@ select, input, textarea {
   text-align: left;
   white-space: nowrap;
 }
+.context-icon { color: var(--vscode-charts-green, var(--vscode-textLink-foreground)); text-align: center; }
+.context-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-shortcut { margin-left: 18px; color: var(--vscode-descriptionForeground); }
 .context-item:hover:not(:disabled), .context-item:focus-visible {
   outline: none;
   color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
@@ -358,8 +386,8 @@ select, input, textarea {
 @media (max-width: 1050px) {
   .log-workspace { grid-template-columns: 190px minmax(390px, 1fr) 250px; }
   .filter-chip { display: none; }
-  .commit-row { grid-template-columns: 28px minmax(210px, 1fr) minmax(90px, .35fr) 110px; }
-  .log-columns { grid-template-columns: minmax(210px, 1fr) minmax(90px, .35fr) 110px; }
+  .commit-row { grid-template-columns: var(--graph-width, 30px) minmax(180px, 1fr) minmax(90px, .35fr) 110px; }
+  .log-columns { grid-template-columns: minmax(calc(180px + var(--graph-width, 30px)), 1fr) minmax(90px, .35fr) 110px; }
   .commit-refs, .log-columns span:nth-child(2) { display: none; }
 }
 

@@ -13,6 +13,7 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
   const token = nonce();
   const cacheKey = `v=${token}`;
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'main.css')).with({ query: cacheKey });
+  const graphScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logGraph.js')).with({ query: cacheKey });
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'main.js')).with({ query: cacheKey });
 
   return `<!doctype html>
@@ -141,6 +142,7 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
   </section>
   <div id="contextMenu" class="context-menu hidden" role="menu" aria-label="Git actions"></div>
   <div id="toast" class="toast hidden" role="status"></div>
+  <script nonce="${token}" src="${graphScriptUri}"></script>
   <script nonce="${token}" src="${scriptUri}"></script>
 </body>
 </html>`;

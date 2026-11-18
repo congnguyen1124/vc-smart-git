@@ -12,6 +12,7 @@
   let previewRequestKey;
   let fileIcons = {};
   const collapsedChangeGroups = new Set(Array.isArray(persisted.collapsedChangeGroups) ? persisted.collapsedChangeGroups : []);
+  const collapsedBranchGroups = new Set(Array.isArray(persisted.collapsedBranchGroups) ? persisted.collapsedBranchGroups : []);
   let consoleEntries = Array.isArray(persisted.consoleEntries) ? persisted.consoleEntries : [];
   let toastTimer;
   let contextSource;
@@ -29,6 +30,7 @@
   const saveUiState = () => vscode.setState({
     activeTab,
     collapsedChangeGroups: [...collapsedChangeGroups],
+    collapsedBranchGroups: [...collapsedBranchGroups],
     consoleEntries: consoleEntries.slice(-200),
   });
 
@@ -232,27 +234,117 @@
     const target = byId('branchTree');
     target.replaceChildren();
     const filter = byId('branchFilter').value.trim().toLowerCase();
+
+    const appendBranchRow = (branch, label, depth) => {
+      const row = element('div', `branch-row${branch.current ? ' current' : ''}`);
+      row.dataset.context = 'branch';
+      row.dataset.branch = branch.name;
+      row.dataset.remote = String(branch.remote);
+      row.dataset.current = String(branch.current);
+      row.style.setProperty('--branch-indent', `${20 + depth * 15}px`);
+      row.tabIndex = 0;
+      row.title = branch.upstream
+        ? `${branch.name}\nTracks ${branch.upstream}${branch.tracking ? ` ${branch.tracking}` : ''}`
+        : branch.name;
+      row.append(element('span', 'branch-icon', branch.current ? '◆' : branch.remote ? '☆' : '⑂'));
+      row.append(element('span', 'ellipsis', label));
+      if (branch.tracking) row.append(element('span', 'branch-tracking', branch.tracking));
+      target.append(row);
+    };
+
+    const appendNodes = (nodes, sectionId, pathParts = [], depth = 0) => {
+      [...nodes.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([name, node]) => {
+        const currentPath = [...pathParts, name];
+        if (node.children.size) {
+          const groupId = `${sectionId}:${currentPath.join('/')}`;
+          const collapsed = collapsedBranchGroups.has(groupId);
+          const folder = element('div', 'branch-folder-row');
+          folder.dataset.action = 'toggleBranchGroup';
+          folder.dataset.branchGroup = groupId;
+          folder.style.setProperty('--branch-indent', `${7 + depth * 15}px`);
+          folder.tabIndex = 0;
+          folder.append(element('span', `chevron-icon${collapsed ? ' collapsed' : ''}`));
+          folder.append(element('span', 'branch-folder-icon', '▱'));
+          folder.append(element('span', 'ellipsis', name));
+          target.append(folder);
+          if (!collapsed) {
+            if (node.branch) appendBranchRow(node.branch, name, depth + 1);
+            appendNodes(node.children, sectionId, currentPath, depth + 1);
+          }
+        } else if (node.branch) {
+          appendBranchRow(node.branch, name, depth);
+        }
+      });
+    };
+
     const appendSection = (title, branches, remote) => {
       const filtered = branches.filter((branch) => !filter || branch.name.toLowerCase().includes(filter));
       if (!filtered.length) return;
       target.append(element('div', 'branch-section-title', title));
+      const nodes = new Map();
       filtered.forEach((branch) => {
-        const row = element('div', `branch-row${branch.current ? ' current' : ''}`);
-        row.dataset.context = 'branch';
-        row.dataset.branch = branch.name;
-        row.dataset.remote = String(remote);
-        row.dataset.current = String(branch.current);
-        if (!remote) {
-          row.tabIndex = 0;
-        }
-        row.append(element('span', 'branch-icon', branch.current ? '◆' : remote ? '☆' : '⑂'));
-        row.append(element('span', 'ellipsis', branch.name));
-        if (branch.tracking) row.append(element('span', 'branch-tracking', branch.tracking));
-        target.append(row);
+        let cursor = nodes;
+        branch.name.split('/').filter(Boolean).forEach((part, index, parts) => {
+          if (!cursor.has(part)) cursor.set(part, { children: new Map(), branch: undefined });
+          const node = cursor.get(part);
+          if (index === parts.length - 1) node.branch = branch;
+          cursor = node.children;
+        });
       });
+      appendNodes(nodes, remote ? 'remote' : 'local');
     };
     appendSection('Local', state.branches.filter((branch) => !branch.remote), false);
     appendSection('Remote', state.branches.filter((branch) => branch.remote), true);
+  }
+
+  const graphColors = [
+    'var(--vscode-charts-purple, #a277ff)',
+    'var(--vscode-charts-green, #62c29b)',
+    'var(--vscode-charts-blue, #75a7e8)',
+    'var(--vscode-charts-orange, #d69d55)',
+    'var(--vscode-charts-red, #df6b75)',
+    'var(--vscode-charts-yellow, #d7ba7d)',
+  ];
+
+  function svgNode(tag, attributes = {}) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+    return node;
+  }
+
+  function graphCell(rowLayout, graphWidth) {
+    const cell = element('span', 'graph-cell');
+    const svg = svgNode('svg', { class: 'graph-svg', viewBox: `0 0 ${graphWidth} 30`, 'aria-hidden': 'true' });
+    const x = (lane) => 9 + lane * 15;
+    const path = (definition, color, className = '') => {
+      const node = svgNode('path', { d: definition, class: `graph-line ${className}`, stroke: graphColors[color % graphColors.length] });
+      svg.append(node);
+    };
+    rowLayout.continuations.forEach((connection) => {
+      path(`M ${x(connection.from)} 0 C ${x(connection.from)} 10 ${x(connection.to)} 20 ${x(connection.to)} 30`, connection.color);
+    });
+    path(`M ${x(rowLayout.currentLane)} 0 L ${x(rowLayout.currentLane)} 15`, rowLayout.currentColor);
+    rowLayout.parentConnections.forEach((connection) => {
+      path(`M ${x(rowLayout.currentLane)} 15 C ${x(rowLayout.currentLane)} 21 ${x(connection.to)} 23 ${x(connection.to)} 30`, connection.color, 'parent-line');
+    });
+    svg.append(svgNode('circle', {
+      class: `graph-node${rowLayout.merge ? ' merge' : ''}`,
+      cx: x(rowLayout.currentLane),
+      cy: 15,
+      r: rowLayout.merge ? 5 : 4,
+      fill: graphColors[rowLayout.currentColor % graphColors.length],
+      stroke: graphColors[rowLayout.currentColor % graphColors.length],
+    }));
+    cell.append(svg);
+    return cell;
+  }
+
+  function refPresentation(raw) {
+    if (raw.startsWith('tag: ')) return { label: raw.slice(5), type: 'tag', icon: '◇' };
+    if (raw.startsWith('HEAD -> ')) return { label: raw.slice(8), type: 'head', icon: '◆' };
+    if (raw.includes('/HEAD -> ')) return { label: raw.split(' -> ').pop(), type: 'remote', icon: '◇' };
+    if (raw.includes('/')) return { label: raw, type: 'remote', icon: '◇' };
+    return { label: raw, type: 'branch', icon: '◇' };
   }
 
   function renderLog() {
@@ -260,23 +352,39 @@
     const list = byId('logList');
     list.replaceChildren();
     const commits = state.commits.filter((commit) => !filter || [commit.subject, commit.authorName, commit.hash, ...commit.refs].join(' ').toLowerCase().includes(filter));
-    commits.forEach((commit) => {
+    const layout = window.SmartGitLogGraph?.layoutCommitGraph(commits) || { rows: [], maxLaneCount: 1 };
+    const graphWidth = Math.max(30, 18 + (layout.maxLaneCount - 1) * 15);
+    byId('logTab').style.setProperty('--graph-width', `${graphWidth}px`);
+    commits.forEach((commit, index) => {
       const row = element('div', `commit-row${selectedCommit === commit.hash ? ' selected' : ''}`);
       row.dataset.action = 'showCommit';
       row.dataset.hash = commit.hash;
       row.dataset.context = 'commit';
       row.setAttribute('role', 'listitem');
       row.tabIndex = 0;
-      const graph = element('span', 'graph-cell');
-      graph.append(element('span', 'graph-dot'));
-      row.append(graph);
+      row.title = `${commit.shortHash} · ${commit.authorName} <${commit.authorEmail}>\n${humanDate(commit.authoredAt)}${commit.body ? `\n\n${commit.body}` : ''}`;
+      row.append(graphCell(layout.rows[index] || {
+        currentLane: 0,
+        currentColor: 0,
+        continuations: [],
+        parentConnections: [],
+        merge: false,
+      }, graphWidth));
       const subject = element('span', 'commit-subject', commit.subject);
       subject.title = `${commit.shortHash} ${commit.subject}`;
       row.append(subject);
       const refs = element('span', 'commit-refs');
-      commit.refs.forEach((ref) => refs.append(element('span', 'ref', ref)));
+      commit.refs.forEach((rawRef) => {
+        const info = refPresentation(rawRef);
+        const ref = element('span', `ref ${info.type}`);
+        ref.title = rawRef;
+        ref.append(element('span', 'ref-icon', info.icon), document.createTextNode(info.label));
+        refs.append(ref);
+      });
       row.append(refs);
-      row.append(element('span', 'commit-author', commit.authorName));
+      const author = element('span', 'commit-author', commit.authorName);
+      author.title = `${commit.authorName} <${commit.authorEmail}>`;
+      row.append(author);
       row.append(element('span', 'commit-date', humanDate(commit.authoredAt)));
       list.append(row);
     });
@@ -508,10 +616,10 @@
       const remote = source.dataset.remote === 'true';
       const current = source.dataset.current === 'true';
       return [
-        ...(!remote && !current ? [{ label: 'Checkout', action: 'switchBranch' }] : []),
-        { label: 'New Branch from Selected…', action: 'newBranchFromRef' },
-        { label: 'Copy Branch Name', action: 'copyBranch' },
-        ...(!remote && !current ? [separator(), { label: 'Delete Branch…', action: 'deleteBranch', danger: true }] : []),
+        ...(!remote && !current ? [{ label: 'Checkout', action: 'switchBranch', icon: '↪' }] : []),
+        { label: 'New Branch from Selected…', action: 'newBranchFromRef', icon: '⑂' },
+        { label: 'Copy Branch Name', action: 'copyBranch', icon: '⧉' },
+        ...(!remote && !current ? [separator(), { label: 'Delete Branch…', action: 'deleteBranch', danger: true, icon: '⌫' }] : []),
       ];
     }
     if (kind === 'commit') {
@@ -519,21 +627,24 @@
       const parent = commit?.parents?.[0];
       const child = state.commits.find((entry) => entry.parents?.includes(source.dataset.hash));
       return [
-        { label: 'Show Commit Details', action: 'showCommit' },
-        { label: 'Compare with Local', action: 'compareWithLocal' },
+        { label: `${commit?.shortHash || ''}  ${commit?.subject || 'Commit'}`, heading: true },
         separator(),
-        { label: 'Reset Current Branch to Here…', action: 'resetToCommit', danger: true },
-        { label: 'Revert Commit…', action: 'revertCommit' },
-        { label: 'Cherry-Pick…', action: 'cherryPick' },
+        { label: 'Copy Revision Number', action: 'copyHash', icon: '⧉' },
+        { label: 'Show Commit Details', action: 'showCommit', icon: 'ⓘ' },
+        { label: 'Cherry-Pick…', action: 'cherryPick', icon: '◉' },
         separator(),
-        { label: 'New Branch…', action: 'branchFromCommit' },
-        { label: 'New Tag…', action: 'tagFromCommit' },
-        { label: 'Checkout Revision…', action: 'checkoutCommit' },
-        { label: 'Copy Revision Number', action: 'copyHash' },
+        { label: 'Checkout Revision…', action: 'checkoutCommit', icon: '↪' },
+        { label: 'Compare with Local', action: 'compareWithLocal', icon: '⇄' },
+        separator(),
+        { label: 'Reset Current Branch to Here…', action: 'resetToCommit', danger: true, icon: '↶' },
+        { label: 'Revert Commit…', action: 'revertCommit', icon: '↩' },
+        separator(),
+        { label: 'New Branch…', action: 'branchFromCommit', icon: '⑂' },
+        { label: 'New Tag…', action: 'tagFromCommit', icon: '◇' },
         ...(parent || child ? [
           separator(),
-          ...(child ? [{ label: 'Go to Child Commit', action: 'navigateCommit', hash: child.hash }] : []),
-          ...(parent ? [{ label: 'Go to Parent Commit', action: 'navigateCommit', hash: parent }] : []),
+          ...(child ? [{ label: 'Go to Child Commit', action: 'navigateCommit', hash: child.hash, icon: '←' }] : []),
+          ...(parent ? [{ label: 'Go to Parent Commit', action: 'navigateCommit', hash: parent, icon: '→' }] : []),
         ] : []),
       ];
     }
@@ -563,8 +674,13 @@
         menu.append(element('div', 'context-separator'));
         return;
       }
-      const button = element('button', `context-item${item.danger ? ' danger' : ''}${item.heading ? ' heading' : ''}`, item.label);
+      const button = element('button', `context-item${item.danger ? ' danger' : ''}${item.heading ? ' heading' : ''}`);
       button.setAttribute('role', 'menuitem');
+      button.append(
+        element('span', 'context-icon', item.icon || ''),
+        element('span', 'context-label', item.label),
+      );
+      if (item.shortcut) button.append(element('span', 'context-shortcut', item.shortcut));
       if (item.heading) {
         button.disabled = true;
       } else {
@@ -613,6 +729,15 @@
         renderChanges();
         break;
       }
+      case 'toggleBranchGroup': {
+        const groupId = target.dataset.branchGroup;
+        if (!groupId) break;
+        if (collapsedBranchGroups.has(groupId)) collapsedBranchGroups.delete(groupId);
+        else collapsedBranchGroups.add(groupId);
+        saveUiState();
+        renderBranches();
+        break;
+      }
       case 'openDiff':
         if (path) post('openDiff', { path, staged: target.dataset.staged === 'true' }); break;
       case 'openDiffNew':
@@ -658,6 +783,15 @@
       case 'clearConsole': consoleEntries = []; saveUiState(); renderConsole(); break;
     }
   }
+
+  document.addEventListener('pointerdown', (event) => {
+    const menu = byId('contextMenu');
+    if (!menu.classList.contains('hidden')
+      && !event.target.closest('#contextMenu')
+      && !event.target.closest('[data-context-trigger]')) {
+      closeContextMenu();
+    }
+  }, true);
 
   document.addEventListener('click', (event) => {
     const trigger = event.target.closest('[data-context-trigger]');

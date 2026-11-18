@@ -1,6 +1,34 @@
-# VC Smart Git
+<p align="center">
+  <img src="resources/app-logo.png" alt="VC Smart Git logo" width="160">
+</p>
 
-A JetBrains-inspired Git tool window for Visual Studio Code. VC Smart Git keeps local changes, history, conflict resolution, and Git blame in one bottom panel without replacing VS Code's built-in Source Control view.
+<h1 align="center">VC Smart Git</h1>
+
+<p align="center">
+  A JetBrains-inspired Git tool window for Visual Studio Code.
+</p>
+
+VC Smart Git keeps local changes, history, conflict resolution, and Git blame in one bottom panel without replacing VS Code's built-in Source Control view.
+
+## Screenshots
+
+### Local Changes
+
+Review tracked and unversioned files side by side with a compact inline diff and quick Git actions.
+
+![VC Smart Git Local Changes](resources/screenshots/local-changes.jpg)
+
+### Log
+
+Explore local and remote branches alongside a colored multi-lane commit graph, references, authors, dates, changed files, and commit details.
+
+![VC Smart Git commit Log](resources/screenshots/log.jpg)
+
+### Git Blame
+
+Annotate the active editor with commit dates and authors, including a clear marker for uncommitted lines.
+
+![VC Smart Git annotations](resources/screenshots/git-blame.jpg)
 
 ## Highlights
 
@@ -39,9 +67,11 @@ Destructive actions require confirmation by default.
 
 The Log tab combines branch navigation, commit history, and commit details:
 
-- Browse local and remote branches.
+- Follow a colored multi-lane commit graph through branches and merges.
+- Browse local and remote branches in a collapsible, path-aware tree.
 - Filter commits by text or hash.
-- Inspect commit files, metadata, author, date, references, and full details.
+- Inspect branch/tag references, author, date, commit files, metadata, and full details.
+- Right-click a commit for revision, checkout, compare, reset, revert, cherry-pick, branch, tag, and parent/child navigation actions.
 - Open per-file commit diffs.
 - Compare a commit with the current working tree.
 - Create branches or tags from a commit.

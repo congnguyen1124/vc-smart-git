@@ -121,6 +121,7 @@ export class GitRepository {
     const result = await this.run([
       'log',
       `--max-count=${limit}`,
+      '--topo-order',
       '--date=iso-strict',
       '--decorate=short',
       '--pretty=format:%H%x00%h%x00%P%x00%an%x00%ae%x00%aI%x00%D%x00%s%x00%b%x1e',
