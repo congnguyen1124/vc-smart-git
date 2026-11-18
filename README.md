@@ -44,11 +44,12 @@ Annotate the active editor with commit dates and authors, including a clear mark
 The Local Changes tab provides a focused working-tree workflow:
 
 - View tracked changes and unversioned files in separate collapsible sections.
+- Select ranges with **Shift** and add or remove individual files with **Cmd/Ctrl**, then run Stage, Unstage, or Rollback for the complete selection.
 - Distinguish added, modified, deleted, renamed, untracked, and conflicted files using the active VS Code theme.
 - Preview concise unified diffs without raw `diff --git` metadata.
 - Open a file in the built-in VS Code Diff Editor or jump directly to its source.
 - Stage or unstage individual files and all changes.
-- Roll back tracked changes or remove untracked files with confirmation.
+- Roll back staged and working-tree changes to `HEAD`, or move new files to Trash, with confirmation.
 - Commit staged changes from the Changes context menu.
 - Copy repository-relative file paths.
 

@@ -38,7 +38,8 @@ test('GitRepository completes local change, history, and conflict workflows', as
     assert.equal(deleted?.kind, 'deleted');
     assert.equal(deleted?.worktreeStatus, 'D');
     assert.equal(deleted?.hasWorkingTreeChange, true);
-    await repository.discardTracked(['delete-me.txt']);
+    await repository.rollbackTracked(['delete-me.txt']);
+    assert.equal(await readFile(path.join(root, 'delete-me.txt'), 'utf8'), 'tracked file\n');
 
     await writeFile(path.join(root, 'shared.txt'), 'working tree\n');
     await writeFile(path.join(root, 'untracked.txt'), 'new\n');
@@ -56,7 +57,12 @@ test('GitRepository completes local change, history, and conflict workflows', as
     status = await repository.status();
     assert.equal(status.changes.find((change) => change.path === 'untracked.txt')?.kind, 'untracked');
 
-    await repository.discardTracked(['shared.txt']);
+    await repository.stage(['shared.txt']);
+    await writeFile(path.join(root, 'shared.txt'), 'working tree after staging\n');
+    await repository.rollbackTracked(['shared.txt']);
+    assert.equal(await readFile(path.join(root, 'shared.txt'), 'utf8'), 'base\n');
+    status = await repository.status();
+    assert.equal(status.changes.some((change) => change.path === 'shared.txt'), false);
     await repository.run(['clean', '-f', '--', 'untracked.txt']);
     await repository.createBranch('other');
     await writeFile(path.join(root, 'shared.txt'), 'other branch\n');

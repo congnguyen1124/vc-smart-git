@@ -14,6 +14,7 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
   const cacheKey = `v=${token}`;
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'main.css')).with({ query: cacheKey });
   const graphScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logGraph.js')).with({ query: cacheKey });
+  const selectionScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'changeSelection.js')).with({ query: cacheKey });
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'main.js')).with({ query: cacheKey });
 
   return `<!doctype html>
@@ -71,9 +72,9 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
           <span class="spacer"></span>
           <span id="diffStats" class="diff-stats"></span>
           <span class="toolbar-separator"></span>
-          <button id="stageSelected" class="icon-button hidden" data-action="stageSelected" title="Stage selected file">＋</button>
-          <button id="unstageSelected" class="icon-button hidden" data-action="unstageSelected" title="Unstage selected file">−</button>
-          <button id="discardSelected" class="icon-button danger hidden" data-action="discardSelected" title="Rollback selected file">↶</button>
+          <button id="stageSelected" class="icon-button hidden" data-action="stageSelected" title="Stage selected files">＋</button>
+          <button id="unstageSelected" class="icon-button hidden" data-action="unstageSelected" title="Unstage selected files">−</button>
+          <button id="discardSelected" class="icon-button danger hidden" data-action="discardSelected" title="Rollback selected files">↶</button>
           <button id="toggleDiffExpanded" class="icon-button" data-action="toggleDiffExpanded" title="Maximize diff preview">⛶</button>
           <button id="diffMenu" class="icon-button menu-trigger hidden" data-context-trigger="change" title="File actions" aria-label="File actions">⋮</button>
         </div>
@@ -143,6 +144,7 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
   <div id="contextMenu" class="context-menu hidden" role="menu" aria-label="Git actions"></div>
   <div id="toast" class="toast hidden" role="status"></div>
   <script nonce="${token}" src="${graphScriptUri}"></script>
+  <script nonce="${token}" src="${selectionScriptUri}"></script>
   <script nonce="${token}" src="${scriptUri}"></script>
 </body>
 </html>`;

@@ -237,10 +237,11 @@ export class GitRepository {
     await this.run(['reset']);
   }
 
-  public async discardTracked(paths: readonly string[]): Promise<void> {
-    if (paths.length > 0) {
-      await this.run(['restore', '--worktree', '--', ...paths]);
+  public async rollbackTracked(paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) {
+      return;
     }
+    await this.run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...paths]);
   }
 
   public async commit(message: string, amend: boolean): Promise<void> {

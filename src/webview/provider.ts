@@ -355,28 +355,54 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     if (valid.length === 0 || !this.activeRepository) {
       return;
     }
+    const changes = this.state.status?.changes ?? [];
+    const selected = valid
+      .map((candidate) => changes.find((change) => change.path === candidate))
+      .filter((change): change is GitStatus['changes'][number] => Boolean(change));
+    const isNewPath = (change: GitStatus['changes'][number]): boolean => change.kind === 'untracked'
+      || change.indexStatus === 'A'
+      || change.indexStatus === 'C'
+      || Boolean(change.originalPath && (change.indexStatus === 'R' || change.worktreeStatus === 'R'));
+    const newPaths = selected.filter(isNewPath);
     const confirm = vscode.workspace.getConfiguration('vcSmartGit').get('confirmDestructiveActions', true);
     if (confirm) {
+      const trashNote = newPaths.length
+        ? ` ${newPaths.length} new file${newPaths.length === 1 ? '' : 's'} will be moved to Trash.`
+        : '';
       const answer = await vscode.window.showWarningMessage(
-        `Discard working tree changes in ${valid.length} file${valid.length === 1 ? '' : 's'}? Untracked files will be moved to Trash.`,
+        `Rollback all local changes in ${valid.length} file${valid.length === 1 ? '' : 's'}?${trashNote}`,
         { modal: true },
-        'Discard Changes',
+        'Rollback',
       );
-      if (answer !== 'Discard Changes') {
+      if (answer !== 'Rollback') {
         return;
       }
     }
 
-    const changes = this.state.status?.changes ?? [];
-    const untracked = valid.filter((candidate) => changes.find((change) => change.path === candidate)?.kind === 'untracked');
-    const tracked = valid.filter((candidate) => !untracked.includes(candidate));
-    await this.execute('Discarding changes', async (repo) => {
-      await repo.discardTracked(tracked);
-      for (const filePath of untracked) {
-        const absolute = resolveRepositoryPath(repo.root, filePath);
-        await vscode.workspace.fs.delete(vscode.Uri.file(absolute), { recursive: false, useTrash: true });
+    const newPathNames = new Set(newPaths.map((change) => change.path));
+    const indexPaths = newPaths
+      .filter((change) => change.hasStagedChange)
+      .flatMap((change) => [change.path, ...(change.originalPath ? [change.originalPath] : [])]);
+    const trackedPaths = selected
+      .filter((change) => !newPathNames.has(change.path))
+      .map((change) => change.path);
+    const renamedOriginalPaths = newPaths.flatMap((change) => change.originalPath ? [change.originalPath] : []);
+    const rollbackPaths = [...new Set([...trackedPaths, ...renamedOriginalPaths])];
+
+    await this.execute('Rolling back changes', async (repo) => {
+      await repo.unstage(indexPaths);
+      await repo.rollbackTracked(rollbackPaths);
+      for (const change of newPaths) {
+        const absolute = resolveRepositoryPath(repo.root, change.path);
+        try {
+          await vscode.workspace.fs.delete(vscode.Uri.file(absolute), { recursive: false, useTrash: true });
+        } catch (error) {
+          if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') {
+            throw error;
+          }
+        }
       }
-    });
+    }, `${valid.length} file${valid.length === 1 ? '' : 's'} rolled back`);
   }
 
   private async useConflictSide(paths: readonly string[], side: 'ours' | 'theirs'): Promise<void> {

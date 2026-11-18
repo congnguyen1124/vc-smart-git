@@ -172,6 +172,7 @@ select, input, textarea {
 }
 .file-row:hover { background: var(--vscode-list-hoverBackground); }
 .file-row.selected { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
+.file-row.active { box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
 .file-row:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .status-letter { font-weight: 700; text-align: center; }
 .status-M { color: var(--vscode-gitDecoration-modifiedResourceForeground, #cca700); }

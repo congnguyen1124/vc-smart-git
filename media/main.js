@@ -2,11 +2,14 @@
   'use strict';
 
   const vscode = acquireVsCodeApi();
+  const { resolveChangeSelection } = globalThis.SmartGitChangeSelection;
   const persisted = vscode.getState() || {};
   let state = { repositories: [], commits: [], branches: [] };
   let activeTab = persisted.activeTab || 'changes';
   let selectedCommit;
   let selectedChange;
+  let selectedChangeKeys = new Set();
+  let changeSelectionAnchor;
   let selectedChangeGroup;
   let changeOrder = [];
   let previewRequestKey;
@@ -81,8 +84,13 @@
 
   function renderFile(change, mode) {
     const descriptor = { path: change.path, mode, staged: mode === 'staged', conflicted: mode === 'conflict' };
-    const row = element('div', `file-row${selectedChange && changeKey(selectedChange) === changeKey(descriptor) ? ' selected' : ''}`);
+    const key = changeKey(descriptor);
+    const selected = selectedChangeKeys.has(key);
+    const active = selectedChange && changeKey(selectedChange) === key;
+    const row = element('div', `file-row${selected ? ' selected' : ''}${active ? ' active' : ''}`);
     row.tabIndex = 0;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(selected));
     row.dataset.action = 'previewDiff';
     row.dataset.path = change.path;
     row.dataset.mode = mode;
@@ -116,15 +124,59 @@
     return selectedChange && state.status?.changes.find((change) => change.path === selectedChange.path);
   }
 
+  function descriptorFromNode(node) {
+    const path = node?.dataset.path;
+    if (!path) return undefined;
+    return {
+      path,
+      mode: node.dataset.mode,
+      staged: node.dataset.staged === 'true',
+      conflicted: node.dataset.conflicted === 'true',
+    };
+  }
+
+  function selectedChangeModels() {
+    return changeOrder
+      .filter((descriptor) => selectedChangeKeys.has(changeKey(descriptor)))
+      .map((descriptor) => ({
+        descriptor,
+        change: state.status?.changes.find((entry) => entry.path === descriptor.path),
+      }))
+      .filter((entry) => Boolean(entry.change));
+  }
+
+  function selectionForSource(source) {
+    const descriptor = descriptorFromNode(source);
+    const selected = selectedChangeModels();
+    if (descriptor && selectedChangeKeys.has(changeKey(descriptor)) && selected.length) {
+      return selected;
+    }
+    const change = descriptor && state.status?.changes.find((entry) => entry.path === descriptor.path);
+    return descriptor && change ? [{ descriptor, change }] : selected;
+  }
+
+  function selectedPathsForAction(action, source) {
+    const matches = selectionForSource(source).filter(({ change }) => {
+      if (action === 'stage') return !change.conflicted && change.hasWorkingTreeChange;
+      if (action === 'unstage') return !change.conflicted && change.hasStagedChange;
+      if (action === 'discard') return !change.conflicted && (change.hasWorkingTreeChange || change.hasStagedChange);
+      return change.conflicted;
+    });
+    return [...new Set(matches.map(({ descriptor }) => descriptor.path))];
+  }
+
   function updateDiffToolbar() {
     const change = selectedChangeModel();
+    const selection = selectedChangeModels();
     const index = changeOrder.findIndex((entry) => selectedChange && changeKey(entry) === changeKey(selectedChange));
-    byId('diffFileCounter').textContent = changeOrder.length && index >= 0
+    byId('diffFileCounter').textContent = selection.length > 1
+      ? `${selection.length} selected`
+      : changeOrder.length && index >= 0
       ? `${index + 1}/${changeOrder.length} files`
       : `0/${changeOrder.length} files`;
-    show(byId('stageSelected'), Boolean(change?.hasWorkingTreeChange && !change.conflicted));
-    show(byId('unstageSelected'), Boolean(change?.hasStagedChange && !change.conflicted));
-    show(byId('discardSelected'), Boolean(change?.hasWorkingTreeChange && !change.conflicted));
+    show(byId('stageSelected'), selection.some(({ change: entry }) => entry.hasWorkingTreeChange && !entry.conflicted));
+    show(byId('unstageSelected'), selection.some(({ change: entry }) => entry.hasStagedChange && !entry.conflicted));
+    show(byId('discardSelected'), selection.some(({ change: entry }) => (entry.hasWorkingTreeChange || entry.hasStagedChange) && !entry.conflicted));
     show(byId('diffMenu'), Boolean(change && selectedChange));
 
     const toolbar = byId('diffToolbar');
@@ -170,14 +222,44 @@
     post('previewDiff', { path: selectedChange.path, staged: selectedChange.staged });
   }
 
-  function selectChange(descriptor) {
-    selectedChange = descriptor;
+  function syncChangeSelectionClasses() {
+    document.querySelectorAll('.file-row').forEach((row) => {
+      const descriptor = descriptorFromNode(row);
+      const key = descriptor && changeKey(descriptor);
+      const selected = Boolean(key && selectedChangeKeys.has(key));
+      const active = Boolean(key && selectedChange && changeKey(selectedChange) === key);
+      row.classList.toggle('selected', selected);
+      row.classList.toggle('active', active);
+      row.setAttribute('aria-selected', String(selected));
+    });
+  }
+
+  function selectChange(descriptor, modifiers = {}) {
+    const targetKey = changeKey(descriptor);
+    const result = resolveChangeSelection(
+      changeOrder.map(changeKey),
+      [...selectedChangeKeys],
+      changeSelectionAnchor,
+      targetKey,
+      modifiers,
+    );
+    selectedChangeKeys = new Set(result.keys);
+    changeSelectionAnchor = result.anchorKey;
+    selectedChange = selectedChangeKeys.has(targetKey)
+      ? descriptor
+      : changeOrder.find((entry) => selectedChangeKeys.has(changeKey(entry))) || descriptor;
     selectedChangeGroup = undefined;
     document.querySelectorAll('.group-header').forEach((header) => header.classList.remove('selected'));
-    document.querySelectorAll('.file-row').forEach((row) => {
-      row.classList.toggle('selected', row.dataset.path === descriptor.path && row.dataset.mode === descriptor.mode);
-    });
+    syncChangeSelectionClasses();
     saveUiState();
+    updateDiffToolbar();
+    requestSelectedPreview(true);
+  }
+
+  function activateSelectedChange(descriptor) {
+    selectedChange = descriptor;
+    selectedChangeGroup = undefined;
+    syncChangeSelectionClasses();
     updateDiffToolbar();
     requestSelectedPreview(true);
   }
@@ -207,8 +289,16 @@
       staged: mode === 'staged',
       conflicted: mode === 'conflict',
     }));
+    const availableKeys = new Set(changeOrder.map(changeKey));
+    selectedChangeKeys = new Set([...selectedChangeKeys].filter((key) => availableKeys.has(key)));
     if (!selectedChange || !changeOrder.some((entry) => changeKey(entry) === changeKey(selectedChange))) {
       selectedChange = changeOrder[0];
+    }
+    if (selectedChange && selectedChangeKeys.size === 0) {
+      selectedChangeKeys.add(changeKey(selectedChange));
+    }
+    if (!changeSelectionAnchor || !availableKeys.has(changeSelectionAnchor)) {
+      changeSelectionAnchor = selectedChange && changeKey(selectedChange);
     }
 
     renderGroup('changesGroup', 'changes', 'Changes', changes);
@@ -556,18 +646,21 @@
   function contextItems(source) {
     const kind = source.dataset.context;
     if (kind === 'change') {
-      const staged = source.dataset.staged === 'true';
-      const conflicted = source.dataset.conflicted === 'true';
-      const hasStaged = source.dataset.hasStaged === 'true';
-      const hasWorking = source.dataset.hasWorking === 'true';
+      const selection = selectionForSource(source);
+      const conflicted = selection.filter(({ change }) => change.conflicted);
+      const ordinary = selection.filter(({ change }) => !change.conflicted);
+      const hasStaged = ordinary.some(({ change }) => change.hasStagedChange);
+      const hasWorking = ordinary.some(({ change }) => change.hasWorkingTreeChange);
+      const canRollback = ordinary.some(({ change }) => change.hasWorkingTreeChange || change.hasStagedChange);
       const items = [
+        ...(selection.length > 1 ? [{ label: `${selection.length} files selected`, heading: true }, separator()] : []),
         { label: 'Show Diff', action: 'openDiff' },
         { label: 'Show Diff in a New Tab', action: 'openDiffNew' },
         { label: 'Jump to Source', action: 'openSource' },
         { label: 'Copy Path/Reference…', action: 'copyPath' },
         separator(),
       ];
-      if (conflicted) {
+      if (conflicted.length) {
         items.push(
           { label: 'Resolve Conflicts', heading: true },
           { label: '  Open Merge Editor', action: 'openMerge' },
@@ -575,10 +668,11 @@
           { label: '  Accept Theirs', action: 'useTheirs' },
           { label: '  Mark Resolved', action: 'markResolved' },
         );
-      } else {
+      }
+      if (ordinary.length) {
         if (hasWorking) items.push({ label: 'Stage', action: 'stage' });
-        if (hasStaged || staged) items.push({ label: 'Unstage', action: 'unstage' });
-        if (hasWorking) items.push({ label: 'Rollback…', action: 'discard', danger: true });
+        if (hasStaged) items.push({ label: 'Unstage', action: 'unstage' });
+        if (canRollback) items.push({ label: 'Rollback…', action: 'discard', danger: true });
       }
       items.push(separator(), { label: 'Refresh', action: 'refresh' });
       return items;
@@ -708,16 +802,22 @@
     document.querySelector(`.commit-row[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
-  function dispatch(action, target) {
+  function dispatch(action, target, event) {
     const path = target.dataset.path;
     const hash = target.dataset.hash || selectedCommit;
     switch (action) {
       case 'refresh': case 'fetch': case 'pull': case 'push': case 'stageAll': case 'unstageAll': case 'continueOperation': case 'abortOperation':
         post(action); break;
-      case 'stage': case 'unstage': case 'discard': case 'markResolved': case 'useOurs': case 'useTheirs': case 'openMerge':
-        if (path) post(action, { paths: [path] }); break;
+      case 'stage': case 'unstage': case 'discard': case 'markResolved': case 'useOurs': case 'useTheirs': case 'openMerge': {
+        const paths = selectedPathsForAction(action, target);
+        if (paths.length) post(action, { paths });
+        break;
+      }
       case 'previewDiff':
-        if (path) selectChange({ path, mode: target.dataset.mode, staged: target.dataset.staged === 'true', conflicted: target.dataset.conflicted === 'true' });
+        if (path) selectChange(
+          { path, mode: target.dataset.mode, staged: target.dataset.staged === 'true', conflicted: target.dataset.conflicted === 'true' },
+          { range: Boolean(event?.shiftKey), toggle: Boolean(event?.metaKey || event?.ctrlKey), additive: Boolean(event?.metaKey || event?.ctrlKey) },
+        );
         break;
       case 'toggleChangeGroup': {
         const groupId = target.dataset.groupId;
@@ -749,9 +849,21 @@
           ? { paths: [selectedChange.path] }
           : { path: selectedChange.path, staged: selectedChange.staged });
         break;
-      case 'stageSelected': if (selectedChange) post('stage', { paths: [selectedChange.path] }); break;
-      case 'unstageSelected': if (selectedChange) post('unstage', { paths: [selectedChange.path] }); break;
-      case 'discardSelected': if (selectedChange) post('discard', { paths: [selectedChange.path] }); break;
+      case 'stageSelected': {
+        const paths = selectedPathsForAction('stage', byId('diffToolbar'));
+        if (paths.length) post('stage', { paths });
+        break;
+      }
+      case 'unstageSelected': {
+        const paths = selectedPathsForAction('unstage', byId('diffToolbar'));
+        if (paths.length) post('unstage', { paths });
+        break;
+      }
+      case 'discardSelected': {
+        const paths = selectedPathsForAction('discard', byId('diffToolbar'));
+        if (paths.length) post('discard', { paths });
+        break;
+      }
       case 'toggleDiffExpanded': {
         const expanded = byId('changesTab').classList.toggle('diff-expanded');
         byId('toggleDiffExpanded').textContent = expanded ? '↙' : '⛶';
@@ -813,7 +925,7 @@
       return;
     }
     event.stopPropagation();
-    dispatch(target.dataset.action, target);
+    dispatch(target.dataset.action, target, event);
     if (target.closest('#contextMenu')) closeContextMenu();
   });
 
@@ -826,12 +938,14 @@
     event.preventDefault();
     event.stopPropagation();
     if (source.dataset.context === 'change' && source.dataset.path) {
-      selectChange({
+      const descriptor = {
         path: source.dataset.path,
         mode: source.dataset.mode,
         staged: source.dataset.staged === 'true',
         conflicted: source.dataset.conflicted === 'true',
-      });
+      };
+      if (selectedChangeKeys.has(changeKey(descriptor))) activateSelectedChange(descriptor);
+      else selectChange(descriptor);
     } else if (source.dataset.context === 'commit' && source.dataset.hash) {
       selectedCommit = source.dataset.hash;
       document.querySelectorAll('.commit-row').forEach((row) => row.classList.toggle('selected', row === source));
@@ -855,7 +969,7 @@
     const target = event.target.closest('[data-action]');
     if ((event.key === 'Enter' || event.key === ' ') && target && !target.matches('button')) {
       event.preventDefault();
-      dispatch(target.dataset.action, target);
+      dispatch(target.dataset.action, target, event);
     }
   });
 
