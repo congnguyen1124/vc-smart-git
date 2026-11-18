@@ -2,7 +2,7 @@
   "name": "vc-smart-git",
   "displayName": "VC Smart Git",
   "description": "A JetBrains-inspired Git tool window for Visual Studio Code.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "hopemachine",
   "license": "MIT",
   "repository": {
@@ -74,7 +74,37 @@
       },
       {
         "command": "vcSmartGit.hideBlame",
-        "title": "Hide Git Blame Annotations",
+        "title": "Close Annotations",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.showBlameCommit",
+        "title": "Show in VC Smart Git Log",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.showBlameDiff",
+        "title": "Show Diff",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.copyBlameRevision",
+        "title": "Copy Revision Number",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.openBlameRevision",
+        "title": "Open Revision",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.openPreviousBlameRevision",
+        "title": "Open Previous Revision",
+        "category": "VC Smart Git"
+      },
+      {
+        "command": "vcSmartGit.viewBlameInBrowser",
+        "title": "View Revision in Browser",
         "category": "VC Smart Git"
       }
     ],
@@ -119,6 +149,36 @@
           "command": "vcSmartGit.hideBlame",
           "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible",
           "group": "navigation@1"
+        },
+        {
+          "command": "vcSmartGit.showBlameCommit",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vcSmartGit.showBlameDiff",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@3"
+        },
+        {
+          "command": "vcSmartGit.copyBlameRevision",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vcSmartGit.openBlameRevision",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@5"
+        },
+        {
+          "command": "vcSmartGit.openPreviousBlameRevision",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@6"
+        },
+        {
+          "command": "vcSmartGit.viewBlameInBrowser",
+          "when": "editorTextFocus && resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine",
+          "group": "navigation@7"
         }
       ],
       "commandPalette": [
@@ -129,6 +189,30 @@
         {
           "command": "vcSmartGit.hideBlame",
           "when": "resourceScheme == file && vcSmartGit.blameVisible"
+        },
+        {
+          "command": "vcSmartGit.showBlameCommit",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
+        },
+        {
+          "command": "vcSmartGit.showBlameDiff",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
+        },
+        {
+          "command": "vcSmartGit.copyBlameRevision",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
+        },
+        {
+          "command": "vcSmartGit.openBlameRevision",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
+        },
+        {
+          "command": "vcSmartGit.openPreviousBlameRevision",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
+        },
+        {
+          "command": "vcSmartGit.viewBlameInBrowser",
+          "when": "resourceScheme == file && vcSmartGit.blameVisible && vcSmartGit.blameCommittedLine"
         }
       ]
     },

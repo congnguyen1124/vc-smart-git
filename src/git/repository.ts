@@ -128,6 +128,24 @@ export class GitRepository {
     return result.exitCode === 0 ? parseLog(result.stdout) : [];
   }
 
+  public async commitByHash(hash: string): Promise<GitCommit | undefined> {
+    const result = await this.run([
+      'show',
+      '--no-patch',
+      '--date=iso-strict',
+      '--decorate=short',
+      '--pretty=format:%H%x00%h%x00%P%x00%an%x00%ae%x00%aI%x00%D%x00%s%x00%b%x1e',
+      hash,
+    ], { allowFailure: true });
+    return result.exitCode === 0 ? parseLog(result.stdout)[0] : undefined;
+  }
+
+  public async remoteUrl(name = 'origin'): Promise<string | undefined> {
+    const result = await this.run(['remote', 'get-url', name], { allowFailure: true });
+    const value = result.stdout.trim();
+    return result.exitCode === 0 && value ? value : undefined;
+  }
+
   public async branches(): Promise<GitBranch[]> {
     const result = await this.run([
       'for-each-ref',
@@ -200,6 +218,7 @@ export class GitRepository {
   }
 
   public async stageAll(): Promise<void> {
+    
     await this.run(['add', '-A']);
   }
 

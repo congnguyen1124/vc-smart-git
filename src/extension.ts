@@ -8,7 +8,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const output = vscode.window.createOutputChannel('VC Smart Git', { log: true });
   const contentProvider = new GitContentProvider();
   const provider = new SmartGitViewProvider(context, contentProvider, output);
-  const blameController = new GitBlameController(output);
+  const blameController = new GitBlameController(
+    output,
+    contentProvider,
+    (target) => provider.revealCommit(target.root, target.line.hash),
+  );
 
   context.subscriptions.push(
     output,
@@ -34,6 +38,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('vcSmartGit.abortOperation', () => provider.runAction('abortOperation')),
     vscode.commands.registerCommand('vcSmartGit.annotateBlame', () => blameController.annotateActive()),
     vscode.commands.registerCommand('vcSmartGit.hideBlame', () => blameController.hideActive()),
+    vscode.commands.registerCommand('vcSmartGit.showBlameCommit', (argument?: unknown) => blameController.showCommit(argument)),
+    vscode.commands.registerCommand('vcSmartGit.showBlameDiff', (argument?: unknown) => blameController.showDiff(argument)),
+    vscode.commands.registerCommand('vcSmartGit.copyBlameRevision', (argument?: unknown) => blameController.copyRevision(argument)),
+    vscode.commands.registerCommand('vcSmartGit.openBlameRevision', (argument?: unknown) => blameController.openRevision(argument)),
+    vscode.commands.registerCommand('vcSmartGit.openPreviousBlameRevision', (argument?: unknown) => blameController.openRevision(argument, true)),
+    vscode.commands.registerCommand('vcSmartGit.viewBlameInBrowser', (argument?: unknown) => blameController.viewInBrowser(argument)),
     vscode.workspace.onDidSaveTextDocument(() => provider.scheduleRefresh()),
     vscode.workspace.onDidCreateFiles(() => provider.scheduleRefresh()),
     vscode.workspace.onDidDeleteFiles(() => provider.scheduleRefresh()),

@@ -17,6 +17,13 @@ test('GitRepository completes local change, history, and conflict workflows', as
     await repository.stageAll();
     await repository.commit('Initial commit', false);
 
+    const initialHash = (await repository.run(['rev-parse', 'HEAD'])).stdout.trim();
+    const initialCommit = await repository.commitByHash(initialHash);
+    assert.equal(initialCommit?.subject, 'Initial commit');
+    assert.equal(initialCommit?.authorName, 'VC Smart Git Test');
+    await repository.run(['remote', 'add', 'origin', 'git@github.com:example/vc-smart-git.git']);
+    assert.equal(await repository.remoteUrl(), 'git@github.com:example/vc-smart-git.git');
+
     const initialBlame = await repository.blame('shared.txt', 'base\n');
     assert.equal(initialBlame[0]?.author, 'VC Smart Git Test');
     assert.equal(initialBlame[0]?.summary, 'Initial commit');

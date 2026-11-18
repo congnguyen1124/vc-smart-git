@@ -694,6 +694,16 @@
       show(byId('commitEmpty'), false);
       show(byId('commitDetails'), true);
       renderLog();
+    } else if (message.type === 'appendCommit') {
+      if (message.commit && !state.commits.some((commit) => commit.hash === message.commit.hash)) {
+        state.commits.push(message.commit);
+        state.commits.sort((left, right) => Date.parse(right.authoredAt) - Date.parse(left.authoredAt));
+        renderLog();
+      }
+    } else if (message.type === 'revealCommit') {
+      byId('logFilter').value = '';
+      setTab('log');
+      selectCommit(message.hash);
     } else if (message.type === 'consoleEntry') {
       consoleEntries.push(message);
       consoleEntries = consoleEntries.slice(-500);

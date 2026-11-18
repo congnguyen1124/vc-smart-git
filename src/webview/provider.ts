@@ -125,6 +125,45 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     }
   }
 
+  public async revealCommit(root: string, hash: string): Promise<void> {
+    if (!/^[0-9a-f]{40,64}$/i.test(hash)) {
+      return;
+    }
+    await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
+    await vscode.commands.executeCommand('workbench.view.extension.vcSmartGit');
+    await vscode.commands.executeCommand('vcSmartGit.toolWindow.focus');
+    await this.refresh();
+
+    const repositoryRoot = this.state.repositories.find(
+      (entry) => path.resolve(entry.root) === path.resolve(root),
+    )?.root;
+    if (!repositoryRoot) {
+      void vscode.window.showWarningMessage('The blamed commit belongs to a repository that is not open in VC Smart Git.');
+      return;
+    }
+    if (path.resolve(this.state.activeRoot ?? '') !== path.resolve(repositoryRoot)) {
+      this.state.activeRoot = repositoryRoot;
+      await this.context.workspaceState.update('vcSmartGit.activeRoot', repositoryRoot);
+      await this.refresh();
+    }
+    if (!this.activeRepository) {
+      return;
+    }
+
+    let commit = this.state.commits.find((entry) => entry.hash === hash);
+    if (!commit) {
+      commit = await this.activeRepository.commitByHash(hash);
+      if (!commit) {
+        void vscode.window.showWarningMessage(`Commit ${hash.slice(0, 8)} is no longer available in this repository.`);
+        return;
+      }
+      this.state.commits = [...this.state.commits, commit]
+        .sort((left, right) => Date.parse(right.authoredAt) - Date.parse(left.authoredAt));
+      this.post({ type: 'appendCommit', commit });
+    }
+    this.post({ type: 'revealCommit', hash });
+  }
+
   private async refreshState(): Promise<void> {
     this.post({ type: 'loading', value: true });
     try {
