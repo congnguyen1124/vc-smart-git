@@ -68,6 +68,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
       enableScripts: true,
       localResourceRoots: [
         vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+        vscode.Uri.joinPath(this.context.extensionUri, 'resources'),
         ...(materialIconExtension ? [materialIconExtension.extensionUri] : []),
       ],
     };
@@ -461,13 +462,15 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
         const absolute = resolveRepositoryPath(repository.root, filePath);
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absolute));
         const content = new TextDecoder().decode(bytes);
+        const normalizedContent = content.endsWith('\n') ? content.slice(0, -1) : content;
+        const lines = normalizedContent ? normalizedContent.split('\n') : [];
         diff = [
           'diff --git /dev/null b/' + filePath,
           'new file mode 100644',
           '--- /dev/null',
           '+++ b/' + filePath,
-          `@@ -0,0 +1,${content.split('\n').length} @@`,
-          ...content.split('\n').map((line) => `+${line}`),
+          `@@ -0,0 +1,${lines.length} @@`,
+          ...lines.map((line) => `+${line}`),
         ].join('\n');
       }
       this.post({

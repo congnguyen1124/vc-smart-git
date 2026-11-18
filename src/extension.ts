@@ -4,6 +4,23 @@ import { GitContentProvider } from './vscode/diffProvider';
 import { GitBlameController } from './vscode/blameController';
 import { observeBuiltInGit } from './vscode/repositoryDiscovery';
 
+class ActivityLauncherProvider implements vscode.TreeDataProvider<string> {
+  public getTreeItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem('Open Smart Git', vscode.TreeItemCollapsibleState.None);
+    item.description = 'Bottom Panel';
+    item.iconPath = new vscode.ThemeIcon('git-branch');
+    item.command = {
+      command: 'vcSmartGit.open',
+      title: 'Open Smart Git',
+    };
+    return item;
+  }
+
+  public getChildren(element?: string): string[] {
+    return element ? [] : ['open'];
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('VC Smart Git', { log: true });
   const contentProvider = new GitContentProvider();
@@ -13,21 +30,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     contentProvider,
     (target) => provider.revealCommit(target.root, target.line.hash),
   );
+  const openToolWindow = async (): Promise<void> => {
+    await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
+    await vscode.commands.executeCommand('workbench.view.extension.vcSmartGit');
+    await vscode.commands.executeCommand('vcSmartGit.toolWindow.focus');
+  };
+  const activityLauncher = vscode.window.createTreeView('vcSmartGit.activityLauncher', {
+    treeDataProvider: new ActivityLauncherProvider(),
+    showCollapseAll: false,
+  });
 
   context.subscriptions.push(
     output,
     contentProvider,
     provider,
     blameController,
+    activityLauncher,
+    activityLauncher.onDidChangeVisibility((event) => {
+      if (event.visible) {
+        void (async () => {
+          await openToolWindow();
+          await vscode.commands.executeCommand('workbench.action.closeSidebar');
+        })();
+      }
+    }),
     vscode.workspace.registerTextDocumentContentProvider('vc-smart-git', contentProvider),
     vscode.window.registerWebviewViewProvider('vcSmartGit.toolWindow', provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.commands.registerCommand('vcSmartGit.open', async () => {
-      await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
-      await vscode.commands.executeCommand('workbench.view.extension.vcSmartGit');
-      await vscode.commands.executeCommand('vcSmartGit.toolWindow.focus');
-    }),
+    vscode.commands.registerCommand('vcSmartGit.open', openToolWindow),
     vscode.commands.registerCommand('vcSmartGit.refresh', () => provider.runAction('refresh')),
     vscode.commands.registerCommand('vcSmartGit.fetch', () => provider.runAction('fetch')),
     vscode.commands.registerCommand('vcSmartGit.pull', () => provider.runAction('pull')),

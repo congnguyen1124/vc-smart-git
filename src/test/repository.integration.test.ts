@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -14,6 +14,7 @@ test('GitRepository completes local change, history, and conflict workflows', as
     await repository.run(['config', 'user.email', 'vc-smart-git@example.test']);
 
     await writeFile(path.join(root, 'shared.txt'), 'base\n');
+    await writeFile(path.join(root, 'delete-me.txt'), 'tracked file\n');
     await repository.stageAll();
     await repository.commit('Initial commit', false);
 
@@ -31,9 +32,17 @@ test('GitRepository completes local change, history, and conflict workflows', as
     assert.equal(modifiedBlame[0]?.uncommitted, true);
     assert.equal(modifiedBlame[0]?.content, 'not committed');
 
+    await unlink(path.join(root, 'delete-me.txt'));
+    let status = await repository.status();
+    const deleted = status.changes.find((change) => change.path === 'delete-me.txt');
+    assert.equal(deleted?.kind, 'deleted');
+    assert.equal(deleted?.worktreeStatus, 'D');
+    assert.equal(deleted?.hasWorkingTreeChange, true);
+    await repository.discardTracked(['delete-me.txt']);
+
     await writeFile(path.join(root, 'shared.txt'), 'working tree\n');
     await writeFile(path.join(root, 'untracked.txt'), 'new\n');
-    let status = await repository.status();
+    status = await repository.status();
     assert.equal(status.branch, 'main');
     assert.equal(status.changes.find((change) => change.path === 'shared.txt')?.worktreeStatus, 'M');
     assert.equal(status.changes.find((change) => change.path === 'untracked.txt')?.kind, 'untracked');

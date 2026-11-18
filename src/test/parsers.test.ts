@@ -10,6 +10,8 @@ test('parsePorcelainV2 reads branch metadata and every change class', () => {
     '# branch.ab +2 -3',
     '1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb src/file with spaces.ts',
     '1 A. N... 000000 100644 100644 0000000 ccccccc staged.ts',
+    '1 .D N... 100644 100644 000000 aaaaaaa 0000000 deleted-working-tree.ts',
+    '1 D. N... 100644 000000 000000 aaaaaaa 0000000 deleted-staged.ts',
     '2 R. N... 100644 100644 100644 ddddddd eeeeeee R100 renamed.ts',
     'old name.ts',
     'u UU N... 100644 100644 100644 100644 aaaaaaa bbbbbbb ccccccc conflict.ts',
@@ -22,7 +24,7 @@ test('parsePorcelainV2 reads branch metadata and every change class', () => {
   assert.equal(status.upstream, 'origin/feature/smart-git');
   assert.equal(status.ahead, 2);
   assert.equal(status.behind, 3);
-  assert.equal(status.changes.length, 5);
+  assert.equal(status.changes.length, 7);
   assert.equal(status.changes[0]?.path, 'conflict.ts');
   assert.equal(status.changes[0]?.conflicted, true);
 
@@ -34,6 +36,16 @@ test('parsePorcelainV2 reads branch metadata and every change class', () => {
   const untracked = status.changes.find((change) => change.path === 'untracked file.txt');
   assert.equal(untracked?.kind, 'untracked');
   assert.equal(untracked?.hasWorkingTreeChange, true);
+
+  const deletedWorkingTree = status.changes.find((change) => change.path === 'deleted-working-tree.ts');
+  assert.equal(deletedWorkingTree?.kind, 'deleted');
+  assert.equal(deletedWorkingTree?.hasWorkingTreeChange, true);
+  assert.equal(deletedWorkingTree?.hasStagedChange, false);
+
+  const deletedStaged = status.changes.find((change) => change.path === 'deleted-staged.ts');
+  assert.equal(deletedStaged?.kind, 'deleted');
+  assert.equal(deletedStaged?.hasWorkingTreeChange, false);
+  assert.equal(deletedStaged?.hasStagedChange, true);
 });
 
 test('parseLog preserves commit bodies and decorations', () => {

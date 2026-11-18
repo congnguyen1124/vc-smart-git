@@ -110,6 +110,33 @@
     return { change, mode: 'staged' };
   }
 
+  function selectedChangeModel() {
+    return selectedChange && state.status?.changes.find((change) => change.path === selectedChange.path);
+  }
+
+  function updateDiffToolbar() {
+    const change = selectedChangeModel();
+    const index = changeOrder.findIndex((entry) => selectedChange && changeKey(entry) === changeKey(selectedChange));
+    byId('diffFileCounter').textContent = changeOrder.length && index >= 0
+      ? `${index + 1}/${changeOrder.length} files`
+      : `0/${changeOrder.length} files`;
+    show(byId('stageSelected'), Boolean(change?.hasWorkingTreeChange && !change.conflicted));
+    show(byId('unstageSelected'), Boolean(change?.hasStagedChange && !change.conflicted));
+    show(byId('discardSelected'), Boolean(change?.hasWorkingTreeChange && !change.conflicted));
+    show(byId('diffMenu'), Boolean(change && selectedChange));
+
+    const toolbar = byId('diffToolbar');
+    ['path', 'mode', 'staged', 'conflicted', 'hasStaged', 'hasWorking'].forEach((key) => delete toolbar.dataset[key]);
+    if (change && selectedChange) {
+      toolbar.dataset.path = change.path;
+      toolbar.dataset.mode = selectedChange.mode;
+      toolbar.dataset.staged = String(selectedChange.staged);
+      toolbar.dataset.conflicted = String(change.conflicted);
+      toolbar.dataset.hasStaged = String(change.hasStagedChange);
+      toolbar.dataset.hasWorking = String(change.hasWorkingTreeChange);
+    }
+  }
+
   function renderGroup(targetId, groupId, title, entries) {
     const target = byId(targetId);
     target.replaceChildren();
@@ -121,8 +148,11 @@
     header.dataset.action = 'toggleChangeGroup';
     header.dataset.context = 'changeGroup';
     header.dataset.groupId = groupId;
-    header.append(element('span', 'group-chevron', collapsed ? '›' : '⌄'));
-    header.append(document.createTextNode(`${title}  ${entries.length} ${entries.length === 1 ? 'file' : 'files'}`));
+    const chevron = element('span', `chevron-icon group-chevron${collapsed ? ' collapsed' : ''}`);
+    chevron.setAttribute('aria-hidden', 'true');
+    header.append(chevron);
+    header.append(element('strong', 'group-title', title));
+    header.append(element('span', 'group-count', `${entries.length} ${entries.length === 1 ? 'file' : 'files'}`));
     group.append(header);
     const body = element('div', 'group-body');
     entries.forEach(({ change, mode }) => body.append(renderFile(change, mode)));
@@ -146,6 +176,7 @@
       row.classList.toggle('selected', row.dataset.path === descriptor.path && row.dataset.mode === descriptor.mode);
     });
     saveUiState();
+    updateDiffToolbar();
     requestSelectedPreview(true);
   }
 
@@ -186,6 +217,7 @@
     const operation = state.operation;
     show(byId('operationBanner'), Boolean(operation));
     byId('operationText').textContent = operation ? `${operation[0].toUpperCase()}${operation.slice(1)} in progress` : '';
+    updateDiffToolbar();
     if (selectedChange) requestSelectedPreview();
     else renderDiffPreview({ path: '', diff: '' });
   }
@@ -298,9 +330,18 @@
   }
 
   function renderDiffPreview(message) {
-    byId('diffTitle').textContent = message.path || 'Select a changed file';
-    byId('diffMeta').textContent = message.path
-      ? `${message.staged ? 'HEAD → Index' : message.conflicted ? 'Unmerged conflict' : 'Index → Working Tree'}  ·  ${message.path}`
+    const parts = fileLabel({ path: message.path || '' });
+    const change = selectedChangeModel();
+    byId('diffFileName').textContent = message.path ? parts.name : 'Select a changed file';
+    byId('diffFilePath').textContent = message.path ? parts.directory : '';
+    byId('diffRevision').textContent = message.path
+      ? message.conflicted
+        ? 'Unmerged conflict'
+        : change?.kind === 'untracked'
+          ? 'Unversioned file · Working tree'
+          : message.staged
+            ? 'Staged change · HEAD → Index'
+            : `${change?.kind === 'deleted' ? 'Deleted file' : 'Current version'} · Working tree`
       : 'Choose a file on the left to preview its changes.';
     const target = byId('diffBody');
     target.replaceChildren();
@@ -315,30 +356,38 @@
     let additions = 0;
     let deletions = 0;
     message.diff.split('\n').forEach((line) => {
+      if (!line || /^(diff --git |index |old mode |new mode |deleted file mode |new file mode |similarity index |rename from |rename to |--- |\+\+\+ |\\ No newline)/.test(line)) {
+        return;
+      }
       let className = 'diff-line';
       let oldLabel = '';
       let newLabel = '';
+      let displayLine = line;
       const hunk = /^@@+ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)?/.exec(line);
       if (hunk) {
         oldLine = Number(hunk[1]);
         newLine = Number(hunk[2]);
         className += ' hunk';
-      } else if (/^(diff |index |--- |\+\+\+ )/.test(line)) {
-        className += ' header';
+        displayLine = `⋯  ${line}`;
       } else if (line.startsWith('+')) {
         className += ' add';
         newLabel = newLine === undefined ? '' : String(newLine++);
         additions += 1;
+        displayLine = line.slice(1);
       } else if (line.startsWith('-')) {
         className += ' delete';
         oldLabel = oldLine === undefined ? '' : String(oldLine++);
         deletions += 1;
+        displayLine = line.slice(1);
       } else if (line.startsWith(' ')) {
         oldLabel = oldLine === undefined ? '' : String(oldLine++);
         newLabel = newLine === undefined ? '' : String(newLine++);
+        displayLine = line.slice(1);
+      } else {
+        className += ' header';
       }
       const row = element('div', className);
-      row.append(element('span', 'line-no', oldLabel), element('span', 'line-no', newLabel), element('span', 'code', line));
+      row.append(element('span', 'line-no', oldLabel), element('span', 'line-no', newLabel), element('span', 'code', displayLine));
       target.append(row);
     });
     byId('diffStats').textContent = `+${additions}  −${deletions}`;
@@ -575,6 +624,15 @@
           ? { paths: [selectedChange.path] }
           : { path: selectedChange.path, staged: selectedChange.staged });
         break;
+      case 'stageSelected': if (selectedChange) post('stage', { paths: [selectedChange.path] }); break;
+      case 'unstageSelected': if (selectedChange) post('unstage', { paths: [selectedChange.path] }); break;
+      case 'discardSelected': if (selectedChange) post('discard', { paths: [selectedChange.path] }); break;
+      case 'toggleDiffExpanded': {
+        const expanded = byId('changesTab').classList.toggle('diff-expanded');
+        byId('toggleDiffExpanded').textContent = expanded ? '↙' : '⛶';
+        byId('toggleDiffExpanded').title = expanded ? 'Restore file list' : 'Maximize diff preview';
+        break;
+      }
       case 'previousChange': moveSelectedChange(-1); break;
       case 'nextChange': moveSelectedChange(1); break;
       case 'promptCommit': post('promptCommit'); break;
@@ -684,7 +742,7 @@
     } else if (message.type === 'loading') {
       show(byId('loading'), message.value && !state.status);
     } else if (message.type === 'diffPreview') {
-      renderDiffPreview(message);
+      if (!selectedChange || message.path === selectedChange.path) renderDiffPreview(message);
     } else if (message.type === 'commitDetails') {
       selectedCommit = message.hash;
       fileIcons = { ...fileIcons, ...(message.fileIcons || {}) };

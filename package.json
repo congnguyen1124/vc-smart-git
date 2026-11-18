@@ -2,8 +2,8 @@
   "name": "vc-smart-git",
   "displayName": "VC Smart Git",
   "description": "A JetBrains-inspired Git tool window for Visual Studio Code.",
-  "version": "0.6.0",
-  "publisher": "hopemachine",
+  "version": "0.8.0",
+  "publisher": "congnguyencn",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -109,6 +109,13 @@
       }
     ],
     "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vcSmartGitActivity",
+          "title": "Smart Git",
+          "icon": "resources/git-tool.svg"
+        }
+      ],
       "panel": [
         {
           "id": "vcSmartGit",
@@ -118,6 +125,12 @@
       ]
     },
     "views": {
+      "vcSmartGitActivity": [
+        {
+          "id": "vcSmartGit.activityLauncher",
+          "name": "Smart Git"
+        }
+      ],
       "vcSmartGit": [
         {
           "id": "vcSmartGit.toolWindow",

@@ -60,17 +60,26 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
         </div>
       </aside>
 
-      <section class="diff-pane">
-        <div class="pane-toolbar diff-toolbar">
+      <section id="diffPane" class="diff-pane">
+        <div id="diffToolbar" class="pane-toolbar diff-toolbar" data-context="change">
           <button class="icon-button" data-action="previousChange" title="Previous change">↑</button>
           <button class="icon-button" data-action="nextChange" title="Next change">↓</button>
           <button class="icon-button" data-action="openSelectedDiff" title="Open in VS Code Diff Editor">↗</button>
           <span class="toolbar-separator"></span>
-          <strong id="diffTitle" class="ellipsis">Select a changed file</strong>
+          <button class="file-counter" data-action="openSelectedDiff" title="Open selected file in VS Code Diff Editor"><span id="diffFileCounter">0/0 files</span> →</button>
           <span class="spacer"></span>
           <span id="diffStats" class="diff-stats"></span>
+          <span class="toolbar-separator"></span>
+          <button id="stageSelected" class="icon-button hidden" data-action="stageSelected" title="Stage selected file">＋</button>
+          <button id="unstageSelected" class="icon-button hidden" data-action="unstageSelected" title="Unstage selected file">−</button>
+          <button id="discardSelected" class="icon-button danger hidden" data-action="discardSelected" title="Rollback selected file">↶</button>
+          <button id="toggleDiffExpanded" class="icon-button" data-action="toggleDiffExpanded" title="Maximize diff preview">⛶</button>
+          <button id="diffMenu" class="icon-button menu-trigger hidden" data-context-trigger="change" title="File actions" aria-label="File actions">⋮</button>
         </div>
-        <div id="diffMeta" class="diff-meta">Choose a file on the left to preview its changes.</div>
+        <div id="diffMeta" class="diff-meta">
+          <div class="diff-file-line"><strong id="diffFileName">Select a changed file</strong><span id="diffFilePath"></span></div>
+          <div id="diffRevision" class="diff-revision">Choose a file on the left to preview its changes.</div>
+        </div>
         <div id="diffBody" class="diff-body" aria-label="Diff preview"></div>
       </section>
     </section>
@@ -86,10 +95,10 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
       <section class="history-pane">
         <div class="pane-toolbar history-toolbar">
           <input id="logFilter" class="filter" type="search" placeholder="Text or hash">
-          <span class="filter-chip">Branch⌄</span>
-          <span class="filter-chip">User⌄</span>
-          <span class="filter-chip">Date⌄</span>
-          <span class="filter-chip">Paths⌄</span>
+          <span class="filter-chip">Branch<span class="chevron-icon" aria-hidden="true"></span></span>
+          <span class="filter-chip">User<span class="chevron-icon" aria-hidden="true"></span></span>
+          <span class="filter-chip">Date<span class="chevron-icon" aria-hidden="true"></span></span>
+          <span class="filter-chip">Paths<span class="chevron-icon" aria-hidden="true"></span></span>
           <span class="spacer"></span>
           <button class="icon-button" data-action="refresh" title="Refresh log">↻</button>
         </div>

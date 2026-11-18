@@ -189,7 +189,7 @@ export class GitRepository {
   }
 
   public async diff(filePath: string, staged: boolean, conflicted: boolean): Promise<string> {
-    const args = ['diff', '--no-color', '--no-ext-diff', '--unified=80'];
+    const args = ['diff', '--no-color', '--no-ext-diff', '--unified=6'];
     if (staged) {
       args.push('--cached');
     } else if (conflicted) {
