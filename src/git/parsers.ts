@@ -143,6 +143,9 @@ export function parseBranches(output: string): GitBranch[] {
     .map((line) => {
       const fields = line.split('\0');
       const ref = fields[0] ?? '';
+      const trackingDetail = fields[5] ?? '';
+      const ahead = Number(/ahead (\d+)/.exec(trackingDetail)?.[1] ?? 0);
+      const behind = Number(/behind (\d+)/.exec(trackingDetail)?.[1] ?? 0);
       return {
         ref,
         name: fields[1] ?? ref,
@@ -150,8 +153,14 @@ export function parseBranches(output: string): GitBranch[] {
         remote: ref.startsWith('refs/remotes/'),
         ...(fields[3] ? { upstream: fields[3] } : {}),
         ...(fields[4] ? { tracking: fields[4] } : {}),
-        hash: fields[5] ?? '',
-        ...(fields[6] ? { committedAt: fields[6] } : {}),
+        ahead,
+        behind,
+        hash: fields[6] ?? '',
+        ...(fields[7] ? { committedAt: fields[7] } : {}),
+        ...(fields[8] ? { worktreePath: fields[8] } : {}),
+        symbolicTarget: fields[9] ?? '',
       };
-    });
+    })
+    .filter((branch) => !branch.symbolicTarget)
+    .map(({ symbolicTarget: _symbolicTarget, ...branch }) => branch);
 }

@@ -11,11 +11,17 @@
   let selectedChangeKeys = new Set();
   let changeSelectionAnchor;
   let selectedChangeGroup;
+  let conflictViewOpen = false;
+  let selectedConflictPath;
   let changeOrder = [];
   let previewRequestKey;
   let fileIcons = {};
   const collapsedChangeGroups = new Set(Array.isArray(persisted.collapsedChangeGroups) ? persisted.collapsedChangeGroups : []);
   const collapsedBranchGroups = new Set(Array.isArray(persisted.collapsedBranchGroups) ? persisted.collapsedBranchGroups : []);
+  let logPaneWidths = persisted.logPaneWidths && typeof persisted.logPaneWidths === 'object'
+    ? { left: Number(persisted.logPaneWidths.left) || undefined, right: Number(persisted.logPaneWidths.right) || undefined }
+    : {};
+  let activePaneResize;
   let consoleEntries = Array.isArray(persisted.consoleEntries) ? persisted.consoleEntries : [];
   let toastTimer;
   let contextSource;
@@ -34,6 +40,7 @@
     activeTab,
     collapsedChangeGroups: [...collapsedChangeGroups],
     collapsedBranchGroups: [...collapsedBranchGroups],
+    logPaneWidths,
     consoleEntries: consoleEntries.slice(-200),
   });
 
@@ -46,10 +53,12 @@
       ['console', 'consoleTab', 'consoleTabButton'],
     ];
     definitions.forEach(([name, pageId, buttonId]) => {
-      show(byId(pageId), tab === name);
+      show(byId(pageId), !conflictViewOpen && tab === name);
       byId(buttonId).classList.toggle('active', tab === name);
       byId(buttonId).setAttribute('aria-selected', String(tab === name));
     });
+    show(byId('conflictView'), conflictViewOpen);
+    byId('app').classList.toggle('conflict-mode', conflictViewOpen);
   }
 
   function statusFor(change, staged) {
@@ -210,7 +219,36 @@
     header.append(element('span', 'group-count', `${entries.length} ${entries.length === 1 ? 'file' : 'files'}`));
     group.append(header);
     const body = element('div', 'group-body');
-    entries.forEach(({ change, mode }) => body.append(renderFile(change, mode)));
+    if (groupId === 'changes') {
+      const conflicts = entries.filter(({ change }) => change.conflicted);
+      const ordinary = entries.filter(({ change }) => !change.conflicted);
+      if (conflicts.length) {
+        const conflictGroupId = 'mergeConflicts';
+        const conflictCollapsed = collapsedChangeGroups.has(conflictGroupId);
+        const conflictGroup = element('section', `conflict-subgroup${conflictCollapsed ? ' collapsed' : ''}`);
+        const conflictHeader = element('div', 'conflict-subgroup-header');
+        conflictHeader.tabIndex = 0;
+        conflictHeader.dataset.action = 'toggleConflictGroup';
+        conflictHeader.dataset.groupId = conflictGroupId;
+        const conflictChevron = element('span', `chevron-icon group-chevron${conflictCollapsed ? ' collapsed' : ''}`);
+        conflictChevron.setAttribute('aria-hidden', 'true');
+        conflictHeader.append(conflictChevron);
+        conflictHeader.append(element('strong', 'conflict-subgroup-title', 'Merge Conflicts'));
+        const resolve = element('button', 'conflict-resolve-link', 'Resolve');
+        resolve.dataset.action = 'openConflictResolver';
+        resolve.title = 'Open the conflict resolver';
+        conflictHeader.append(resolve);
+        conflictHeader.append(element('span', 'group-count', `${conflicts.length} ${conflicts.length === 1 ? 'file' : 'files'}`));
+        conflictGroup.append(conflictHeader);
+        const conflictBody = element('div', 'conflict-subgroup-body');
+        conflicts.forEach(({ change, mode }) => conflictBody.append(renderFile(change, mode)));
+        conflictGroup.append(conflictBody);
+        body.append(conflictGroup);
+      }
+      ordinary.forEach(({ change, mode }) => body.append(renderFile(change, mode)));
+    } else {
+      entries.forEach(({ change, mode }) => body.append(renderFile(change, mode)));
+    }
     group.append(body);
     target.append(group);
   }
@@ -315,6 +353,96 @@
     else renderDiffPreview({ path: '', diff: '' });
   }
 
+  function renderConflictResolver() {
+    const conflictState = state.conflicts;
+    const conflicts = conflictState?.files || [];
+    if (conflictViewOpen && !conflictState && !state.operation) {
+      conflictViewOpen = false;
+    }
+    if (!conflicts.some((conflict) => conflict.path === selectedConflictPath)) {
+      selectedConflictPath = conflicts[0]?.path;
+    }
+
+    const current = conflictState?.currentBranch || state.status?.branch || 'current branch';
+    const incoming = conflictState?.incomingLabel || 'incoming changes';
+    const operation = conflictState?.operation || state.operation;
+    const operationText = byId('conflictOperationText');
+    operationText.replaceChildren();
+    if (operation === 'merge') {
+      operationText.append(
+        document.createTextNode('Merging branch '),
+        element('strong', '', incoming),
+        document.createTextNode(' into branch '),
+        element('strong', '', current),
+      );
+    } else {
+      const label = operation ? `${operation[0].toUpperCase()}${operation.slice(1)}` : 'Merge';
+      operationText.append(
+        element('strong', '', label),
+        document.createTextNode(` conflicts on branch `),
+        element('strong', '', current),
+      );
+    }
+    byId('oursColumn').textContent = `Yours (${current})`;
+    byId('theirsColumn').textContent = `Theirs (${incoming})`;
+
+    const simple = conflicts.filter((conflict) => conflict.simple);
+    const simpleButton = byId('resolveSimpleConflicts');
+    simpleButton.disabled = simple.length === 0;
+    simpleButton.dataset.paths = JSON.stringify(simple.map((conflict) => conflict.path));
+    simpleButton.title = simple.length
+      ? `Safely resolve ${simple.length} conflict${simple.length === 1 ? '' : 's'} where both sides are identical or both deleted`
+      : 'Disabled because the remaining conflicts require a manual choice';
+    byId('simpleConflictHint').textContent = simple.length
+      ? `${simple.length} safe automatic resolution${simple.length === 1 ? '' : 's'} available`
+      : conflicts.length ? 'No conflict can be resolved automatically without choosing a side.' : '';
+
+    const list = byId('conflictList');
+    list.replaceChildren();
+    if (conflicts.length) {
+      const section = element('div', 'conflict-section-header');
+      section.append(
+        element('span', 'conflict-section-mark', '−'),
+        element('strong', '', 'Unresolved'),
+        element('span', 'group-count', `${conflicts.length} ${conflicts.length === 1 ? 'file' : 'files'}`),
+      );
+      list.append(section);
+    }
+    conflicts.forEach((conflict) => {
+      const row = element('div', `conflict-row${selectedConflictPath === conflict.path ? ' selected' : ''}`);
+      row.dataset.conflictPath = conflict.path;
+      row.setAttribute('role', 'row');
+
+      const file = element('div', 'conflict-file');
+      file.dataset.action = 'resolveConflictFile';
+      file.dataset.conflictPath = conflict.path;
+      file.tabIndex = 0;
+      file.append(materialFileIcon(conflict.path));
+      const parts = fileLabel({ path: conflict.path });
+      const label = element('span', 'conflict-file-label', parts.name);
+      if (parts.directory) label.append(element('span', 'file-dir', parts.directory));
+      file.append(label, element('span', 'conflict-progress', '0/1'));
+      row.append(file);
+
+      [['ours', conflict.ours, conflict.oursAvailable], ['theirs', conflict.theirs, conflict.theirsAvailable]].forEach(([side, status, available]) => {
+        const cell = element('div', 'conflict-side');
+        cell.append(element('span', 'conflict-side-status', status));
+        const accept = element('button', '', 'Accept');
+        accept.dataset.action = side === 'ours' ? 'useOurs' : 'useTheirs';
+        accept.dataset.conflictPath = conflict.path;
+        accept.disabled = !available && status !== 'Deleted';
+        accept.title = status === 'Deleted' ? `Accept deletion from ${side}` : `Accept ${side}`;
+        cell.append(accept);
+        row.append(cell);
+      });
+      list.append(row);
+    });
+
+    show(byId('conflictEmpty'), conflicts.length === 0);
+    byId('finishConflicts').disabled = conflicts.length > 0 || !operation;
+    byId('resolveManually').disabled = conflicts.length === 0;
+  }
+
   function humanDate(value) {
     if (!value) return '';
     const date = new Date(value);
@@ -327,19 +455,29 @@
     const filter = byId('branchFilter').value.trim().toLowerCase();
 
     const appendBranchRow = (branch, label, depth) => {
-      const row = element('div', `branch-row${branch.current ? ' current' : ''}`);
+      const checkedOut = Boolean(branch.current || branch.worktreePath);
+      const row = element('div', `branch-row${branch.current ? ' current' : ''}${!branch.current && branch.worktreePath ? ' worktree' : ''}`);
       row.dataset.context = 'branch';
       row.dataset.branch = branch.name;
       row.dataset.remote = String(branch.remote);
       row.dataset.current = String(branch.current);
+      row.dataset.checkedOut = String(checkedOut);
       row.style.setProperty('--branch-indent', `${20 + depth * 15}px`);
       row.tabIndex = 0;
-      row.title = branch.upstream
-        ? `${branch.name}\nTracks ${branch.upstream}${branch.tracking ? ` ${branch.tracking}` : ''}`
-        : branch.name;
-      row.append(element('span', 'branch-icon', branch.current ? '◆' : branch.remote ? '☆' : '⑂'));
+      const details = [branch.name];
+      if (branch.current) details.push('Currently checked out (HEAD)');
+      else if (branch.worktreePath) details.push(`Checked out in ${branch.worktreePath}`);
+      if (branch.upstream) details.push(`Tracks ${branch.upstream}`);
+      if (branch.ahead || branch.behind) details.push(`Ahead ${branch.ahead} · Behind ${branch.behind}`);
+      row.title = details.join('\n');
+      row.append(element('span', 'branch-icon', branch.current ? '✓' : branch.worktreePath ? '◆' : branch.remote ? '◇' : '⑂'));
       row.append(element('span', 'ellipsis', label));
-      if (branch.tracking) row.append(element('span', 'branch-tracking', branch.tracking));
+      const badges = element('span', 'branch-state-badges');
+      if (branch.current) badges.append(element('span', 'branch-state checkout', 'HEAD'));
+      else if (branch.worktreePath) badges.append(element('span', 'branch-state checkout', 'worktree'));
+      if (branch.ahead) badges.append(element('span', 'branch-state ahead', `↑${branch.ahead}`));
+      if (branch.behind) badges.append(element('span', 'branch-state behind', `↓${branch.behind}`));
+      if (badges.childElementCount) row.append(badges);
       target.append(row);
     };
 
@@ -430,14 +568,6 @@
     return cell;
   }
 
-  function refPresentation(raw) {
-    if (raw.startsWith('tag: ')) return { label: raw.slice(5), type: 'tag', icon: '◇' };
-    if (raw.startsWith('HEAD -> ')) return { label: raw.slice(8), type: 'head', icon: '◆' };
-    if (raw.includes('/HEAD -> ')) return { label: raw.split(' -> ').pop(), type: 'remote', icon: '◇' };
-    if (raw.includes('/')) return { label: raw, type: 'remote', icon: '◇' };
-    return { label: raw, type: 'branch', icon: '◇' };
-  }
-
   function renderLog() {
     const filter = byId('logFilter').value.trim().toLowerCase();
     const list = byId('logList');
@@ -447,7 +577,9 @@
     const graphWidth = Math.max(30, 18 + (layout.maxLaneCount - 1) * 15);
     byId('logTab').style.setProperty('--graph-width', `${graphWidth}px`);
     commits.forEach((commit, index) => {
-      const row = element('div', `commit-row${selectedCommit === commit.hash ? ' selected' : ''}`);
+      const presentations = window.SmartGitLogGraph?.commitRefPresentations(commit, state.branches, state.status) || [];
+      const isHead = presentations.some((info) => info.type === 'head');
+      const row = element('div', `commit-row${selectedCommit === commit.hash ? ' selected' : ''}${isHead ? ' head' : ''}`);
       row.dataset.action = 'showCommit';
       row.dataset.hash = commit.hash;
       row.dataset.context = 'commit';
@@ -465,10 +597,9 @@
       subject.title = `${commit.shortHash} ${commit.subject}`;
       row.append(subject);
       const refs = element('span', 'commit-refs');
-      commit.refs.forEach((rawRef) => {
-        const info = refPresentation(rawRef);
+      presentations.forEach((info) => {
         const ref = element('span', `ref ${info.type}`);
-        ref.title = rawRef;
+        ref.title = info.title;
         ref.append(element('span', 'ref-icon', info.icon), document.createTextNode(info.label));
         refs.append(ref);
       });
@@ -621,10 +752,65 @@
     if (!hasRepository) return;
     renderRepositories();
     renderChanges();
+    renderConflictResolver();
     renderBranches();
     renderLog();
     renderConsole();
     setTab(activeTab);
+    applyLogPaneWidths();
+  }
+
+  function applyLogPaneWidths() {
+    const workspace = byId('logTab');
+    if (!workspace) return;
+    if (Number.isFinite(logPaneWidths.left)) workspace.style.setProperty('--branches-pane-width', `${logPaneWidths.left}px`);
+    else workspace.style.removeProperty('--branches-pane-width');
+    if (Number.isFinite(logPaneWidths.right)) workspace.style.setProperty('--commit-pane-width', `${logPaneWidths.right}px`);
+    else workspace.style.removeProperty('--commit-pane-width');
+  }
+
+  function beginPaneResize(event, resizer) {
+    if (event.button !== 0) return;
+    const workspace = byId('logTab');
+    const side = resizer.dataset.resizer;
+    if (!workspace || !side) return;
+    const workspaceRect = workspace.getBoundingClientRect();
+    activePaneResize = {
+      side,
+      startX: event.clientX,
+      containerWidth: workspaceRect.width,
+      left: byId('branchTree').closest('.branches-pane').getBoundingClientRect().width,
+      right: byId('commitDetails').closest('.commit-pane').getBoundingClientRect().width,
+      resizer,
+    };
+    resizer.setPointerCapture?.(event.pointerId);
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing-panes');
+    event.preventDefault();
+  }
+
+  function resizePane(event) {
+    if (!activePaneResize) return;
+    const delta = event.clientX - activePaneResize.startX;
+    const requested = activePaneResize.side === 'left'
+      ? activePaneResize.left + delta
+      : activePaneResize.right - delta;
+    logPaneWidths = window.SmartGitLogGraph.resizeLogPanes(
+      activePaneResize.containerWidth,
+      activePaneResize.left,
+      activePaneResize.right,
+      activePaneResize.side,
+      requested,
+    );
+    applyLogPaneWidths();
+  }
+
+  function finishPaneResize() {
+    if (!activePaneResize) return;
+    activePaneResize.resizer.classList.remove('dragging');
+    document.body.classList.remove('resizing-panes');
+    activePaneResize = undefined;
+    saveUiState();
   }
 
   function toast(message) {
@@ -665,6 +851,7 @@
       if (conflicted.length) {
         items.push(
           { label: 'Resolve Conflicts', heading: true },
+          { label: '  Open Conflict Resolver', action: 'openConflictResolver' },
           { label: '  Open Merge Editor', action: 'openMerge' },
           { label: '  Accept Ours', action: 'useOurs' },
           { label: '  Accept Theirs', action: 'useTheirs' },
@@ -712,11 +899,12 @@
     if (kind === 'branch') {
       const remote = source.dataset.remote === 'true';
       const current = source.dataset.current === 'true';
+      const checkedOut = source.dataset.checkedOut === 'true';
       return [
-        ...(!remote && !current ? [{ label: 'Checkout', action: 'switchBranch', icon: '↪' }] : []),
+        ...(!remote && !checkedOut ? [{ label: 'Checkout', action: 'switchBranch', icon: '↪' }] : []),
         { label: 'New Branch from Selected…', action: 'newBranchFromRef', icon: '⑂' },
         { label: 'Copy Branch Name', action: 'copyBranch', icon: '⧉' },
-        ...(!remote && !current ? [separator(), { label: 'Delete Branch…', action: 'deleteBranch', danger: true, icon: '⌫' }] : []),
+        ...(!remote && !current && !checkedOut ? [separator(), { label: 'Delete Branch…', action: 'deleteBranch', danger: true, icon: '⌫' }] : []),
       ];
     }
     if (kind === 'commit') {
@@ -812,7 +1000,9 @@
       case 'refresh': case 'fetch': case 'pull': case 'push': case 'stageAll': case 'unstageAll': case 'continueOperation': case 'abortOperation':
         post(action); break;
       case 'stage': case 'unstage': case 'discard': case 'deleteFiles': case 'markResolved': case 'useOurs': case 'useTheirs': case 'openMerge': {
-        const paths = selectedPathsForAction(action, target);
+        const paths = target.dataset.conflictPath
+          ? [target.dataset.conflictPath]
+          : selectedPathsForAction(action, target);
         if (paths.length) post(action, { paths });
         break;
       }
@@ -832,6 +1022,47 @@
         renderChanges();
         break;
       }
+      case 'toggleConflictGroup': {
+        const groupId = target.dataset.groupId;
+        if (!groupId) break;
+        if (collapsedChangeGroups.has(groupId)) collapsedChangeGroups.delete(groupId);
+        else collapsedChangeGroups.add(groupId);
+        saveUiState();
+        renderChanges();
+        break;
+      }
+      case 'openConflictResolver':
+        if (state.conflicts?.files?.length) {
+          conflictViewOpen = true;
+          selectedConflictPath = state.conflicts.files[0]?.path;
+          renderConflictResolver();
+          setTab(activeTab);
+        }
+        break;
+      case 'closeConflictResolver':
+        conflictViewOpen = false;
+        setTab('changes');
+        break;
+      case 'resolveConflictFile':
+        if (target.dataset.conflictPath) {
+          selectedConflictPath = target.dataset.conflictPath;
+          renderConflictResolver();
+          post('openMerge', { paths: [selectedConflictPath] });
+        }
+        break;
+      case 'resolveManually': {
+        const conflictPath = selectedConflictPath || state.conflicts?.files?.[0]?.path;
+        if (conflictPath) post('openMerge', { paths: [conflictPath] });
+        break;
+      }
+      case 'resolveSimpleConflicts': {
+        const paths = (state.conflicts?.files || []).filter((conflict) => conflict.simple).map((conflict) => conflict.path);
+        if (paths.length) post('resolveSimpleConflicts', { paths });
+        break;
+      }
+      case 'finishConflicts':
+        if (!(state.conflicts?.files?.length) && state.operation) post('continueOperation');
+        break;
       case 'toggleBranchGroup': {
         const groupId = target.dataset.branchGroup;
         if (!groupId) break;
@@ -900,6 +1131,8 @@
   }
 
   document.addEventListener('pointerdown', (event) => {
+    const resizer = event.target.closest('.pane-resizer');
+    if (resizer) beginPaneResize(event, resizer);
     const menu = byId('contextMenu');
     if (!menu.classList.contains('hidden')
       && !event.target.closest('#contextMenu')
@@ -907,6 +1140,10 @@
       closeContextMenu();
     }
   }, true);
+
+  document.addEventListener('pointermove', resizePane);
+  document.addEventListener('pointerup', finishPaneResize);
+  document.addEventListener('pointercancel', finishPaneResize);
 
   document.addEventListener('click', (event) => {
     const trigger = event.target.closest('[data-context-trigger]');
@@ -958,6 +1195,13 @@
   });
 
   document.addEventListener('dblclick', (event) => {
+    const resizer = event.target.closest('.pane-resizer');
+    if (resizer) {
+      logPaneWidths = { ...logPaneWidths, [resizer.dataset.resizer]: undefined };
+      applyLogPaneWidths();
+      saveUiState();
+      return;
+    }
     const row = event.target.closest('.file-row');
     if (!row?.dataset.path) return;
     if (row.dataset.conflicted === 'true') post('openMerge', { paths: [row.dataset.path] });
@@ -965,6 +1209,29 @@
   });
 
   document.addEventListener('keydown', (event) => {
+    const resizer = event.target.closest('.pane-resizer');
+    if (resizer && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault();
+      const workspace = byId('logTab');
+      const side = resizer.dataset.resizer;
+      const currentLeft = byId('branchTree').closest('.branches-pane').getBoundingClientRect().width;
+      const currentRight = byId('commitDetails').closest('.commit-pane').getBoundingClientRect().width;
+      const direction = event.key === 'ArrowRight' ? 1 : -1;
+      const step = event.shiftKey ? 48 : 16;
+      const requested = side === 'left'
+        ? currentLeft + direction * step
+        : currentRight - direction * step;
+      logPaneWidths = window.SmartGitLogGraph.resizeLogPanes(
+        workspace.getBoundingClientRect().width,
+        currentLeft,
+        currentRight,
+        side,
+        requested,
+      );
+      applyLogPaneWidths();
+      saveUiState();
+      return;
+    }
     if (event.key === 'Escape') {
       closeContextMenu();
       return;

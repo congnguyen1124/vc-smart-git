@@ -58,9 +58,12 @@ The Local Changes tab provides a focused working-tree workflow:
 
 Conflicted files are surfaced at the top of Changes and provide dedicated actions:
 
-- Open VS Code's Merge Editor.
-- Accept **Ours** or **Theirs**.
-- Mark a file as resolved.
+- Expand the dedicated **Merge Conflicts** section and open the conflict resolver with **Resolve**.
+- Review every unresolved file with separate **Yours** and **Theirs** states and accept either side directly.
+- Open VS Code's three-way Merge Editor by selecting a file or choosing **Resolve Manually**.
+- Use **Resolve Simple Conflicts** when both sides are identical or both deleted; the button stays disabled when an automatic result would be ambiguous.
+- Finish the active merge, rebase, cherry-pick, or revert only after every file is resolved.
+- Mark a file as resolved from its context menu when it has already been edited manually.
 - Continue or abort merge, rebase, cherry-pick, or revert operations.
 
 Destructive actions require confirmation by default.
@@ -70,7 +73,9 @@ Destructive actions require confirmation by default.
 The Log tab combines branch navigation, commit history, and commit details:
 
 - Follow a colored multi-lane commit graph through branches and merges.
-- Browse local and remote branches in a collapsible, path-aware tree.
+- Browse local and remote branches in a collapsible, path-aware tree with explicit HEAD, linked-worktree, ahead, and behind states.
+- See accurate local, remote, tag, current checkout, and linked-worktree badges on the commit where each ref points.
+- Drag the vertical splitters to resize the branch tree, commit history, and commit details panes; double-click a splitter to restore its default width.
 - Filter commits by text or hash.
 - Inspect branch/tag references, author, date, commit files, metadata, and full details.
 - Right-click a commit for revision, checkout, compare, reset, revert, cherry-pick, branch, tag, and parent/child navigation actions.

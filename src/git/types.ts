@@ -28,6 +28,26 @@ export interface GitStatus {
   changes: GitChange[];
 }
 
+export type GitConflictSideStatus = 'Modified' | 'Added' | 'Deleted';
+
+export interface GitConflict {
+  path: string;
+  status: string;
+  ours: GitConflictSideStatus;
+  theirs: GitConflictSideStatus;
+  oursAvailable: boolean;
+  theirsAvailable: boolean;
+  simple: boolean;
+  simpleReason?: 'identical' | 'bothDeleted';
+}
+
+export interface GitConflictState {
+  currentBranch: string;
+  incomingLabel?: string;
+  operation?: GitOperation;
+  files: GitConflict[];
+}
+
 export interface GitCommit {
   hash: string;
   shortHash: string;
@@ -53,6 +73,9 @@ export interface GitBranch {
   remote: boolean;
   upstream?: string;
   tracking?: string;
+  ahead: number;
+  behind: number;
+  worktreePath?: string;
   hash: string;
   committedAt?: string;
 }

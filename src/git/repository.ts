@@ -4,7 +4,16 @@ import * as path from 'node:path';
 import { parseBlamePorcelain } from './blame';
 import { parseBranches, parseLog, parsePorcelainV2 } from './parsers';
 import type { GitBlameLine } from './blame';
-import type { GitBranch, GitCommit, GitCommitFile, GitOperation, GitStatus } from './types';
+import type {
+  GitBranch,
+  GitCommit,
+  GitCommitFile,
+  GitConflict,
+  GitConflictSideStatus,
+  GitConflictState,
+  GitOperation,
+  GitStatus,
+} from './types';
 
 interface RunOptions {
   allowFailure?: boolean;
@@ -57,6 +66,51 @@ function parseNameStatus(output: string): GitCommitFile[] {
     }
   }
   return files;
+}
+
+interface UnmergedStages {
+  ours?: string;
+  theirs?: string;
+}
+
+function conflictSideStatuses(code: string): [GitConflictSideStatus, GitConflictSideStatus] {
+  switch (code) {
+    case 'DD': return ['Deleted', 'Deleted'];
+    case 'AU': return ['Added', 'Deleted'];
+    case 'UD': return ['Modified', 'Deleted'];
+    case 'UA': return ['Deleted', 'Added'];
+    case 'DU': return ['Deleted', 'Modified'];
+    case 'AA': return ['Added', 'Added'];
+    default: return ['Modified', 'Modified'];
+  }
+}
+
+function parseUnmergedStages(output: string): Map<string, UnmergedStages> {
+  const result = new Map<string, UnmergedStages>();
+  for (const record of output.split('\0')) {
+    if (!record) {
+      continue;
+    }
+    const separator = record.indexOf('\t');
+    if (separator < 0) {
+      continue;
+    }
+    const metadata = record.slice(0, separator).trim().split(/\s+/);
+    const filePath = record.slice(separator + 1);
+    const hash = metadata[1];
+    const stage = metadata[2];
+    if (!filePath || !hash || (stage !== '2' && stage !== '3')) {
+      continue;
+    }
+    const stages = result.get(filePath) ?? {};
+    if (stage === '2') {
+      stages.ours = hash;
+    } else {
+      stages.theirs = hash;
+    }
+    result.set(filePath, stages);
+  }
+  return result;
 }
 
 export class GitRepository {
@@ -151,7 +205,7 @@ export class GitRepository {
     const result = await this.run([
       'for-each-ref',
       '--sort=-committerdate',
-      '--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:trackshort)%00%(objectname)%00%(committerdate:iso-strict)',
+      '--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:trackshort)%00%(upstream:track)%00%(objectname)%00%(committerdate:iso-strict)%00%(worktreepath)%00%(symref)',
       'refs/heads',
       'refs/remotes',
     ]);
@@ -301,9 +355,86 @@ export class GitRepository {
     await this.run(['reset', '--hard', hash]);
   }
 
-  public async useConflictSide(filePath: string, side: 'ours' | 'theirs'): Promise<void> {
+  public async useConflictSide(filePath: string, side: 'ours' | 'theirs', deleted = false): Promise<void> {
+    if (deleted) {
+      await this.run(['rm', '--ignore-unmatch', '--', filePath]);
+      return;
+    }
     await this.run(['checkout', `--${side}`, '--', filePath]);
     await this.stage([filePath]);
+  }
+
+  public async conflicts(status: GitStatus, operation?: GitOperation): Promise<GitConflictState> {
+    const unmerged = await this.run(['ls-files', '--unmerged', '-z'], { allowFailure: true });
+    const stages = parseUnmergedStages(unmerged.stdout);
+    const files: GitConflict[] = status.changes
+      .filter((change) => change.conflicted)
+      .map((change) => {
+        const code = `${change.indexStatus}${change.worktreeStatus}`;
+        const [ours, theirs] = conflictSideStatuses(code);
+        const fileStages = stages.get(change.path) ?? {};
+        const bothDeleted = code === 'DD';
+        const identical = Boolean(fileStages.ours && fileStages.theirs && fileStages.ours === fileStages.theirs);
+        return {
+          path: change.path,
+          status: code,
+          ours,
+          theirs,
+          oursAvailable: Boolean(fileStages.ours),
+          theirsAvailable: Boolean(fileStages.theirs),
+          simple: bothDeleted || identical,
+          ...(bothDeleted ? { simpleReason: 'bothDeleted' as const } : identical ? { simpleReason: 'identical' as const } : {}),
+        };
+      });
+    const incomingLabel = operation ? await this.operationTarget(operation) : undefined;
+    return {
+      currentBranch: status.branch,
+      ...(incomingLabel ? { incomingLabel } : {}),
+      ...(operation ? { operation } : {}),
+      files,
+    };
+  }
+
+  public async resolveSimpleConflicts(conflicts: readonly GitConflict[]): Promise<void> {
+    for (const conflict of conflicts) {
+      if (!conflict.simple || !conflict.simpleReason) {
+        continue;
+      }
+      if (conflict.simpleReason === 'bothDeleted') {
+        await this.run(['rm', '--ignore-unmatch', '--', conflict.path]);
+      } else {
+        await this.run(['checkout', '--ours', '--', conflict.path]);
+        await this.stage([conflict.path]);
+      }
+    }
+  }
+
+  private async operationTarget(operation: GitOperation): Promise<string | undefined> {
+    const marker = operation === 'merge'
+      ? 'MERGE_HEAD'
+      : operation === 'cherry-pick'
+        ? 'CHERRY_PICK_HEAD'
+        : operation === 'revert'
+          ? 'REVERT_HEAD'
+          : operation === 'rebase'
+            ? 'REBASE_HEAD'
+            : undefined;
+    if (!marker) {
+      return undefined;
+    }
+    const revision = await this.run(['rev-parse', marker], { allowFailure: true });
+    const hash = revision.stdout.trim();
+    if (revision.exitCode !== 0 || !hash) {
+      return undefined;
+    }
+    const refs = await this.run([
+      'for-each-ref',
+      `--points-at=${hash}`,
+      '--format=%(refname:short)',
+      'refs/heads',
+      'refs/remotes',
+    ], { allowFailure: true });
+    return refs.stdout.split('\n').map((value) => value.trim()).find(Boolean) ?? hash.slice(0, 8);
   }
 
   public async operation(): Promise<GitOperation | undefined> {

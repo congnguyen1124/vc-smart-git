@@ -77,5 +77,65 @@
     return { rows, maxLaneCount };
   }
 
-  return { layoutCommitGraph };
+  function commitRefPresentations(commit, branches, status) {
+    const refs = [];
+    const seen = new Set();
+    const add = (label, type, icon, title) => {
+      const key = `${type}:${label}`;
+      if (!label || seen.has(key)) return;
+      seen.add(key);
+      refs.push({ label, type, icon, title: title || label });
+    };
+    const matchingBranches = (branches || [])
+      .filter((branch) => branch.hash === commit.hash)
+      .sort((left, right) => Number(right.current) - Number(left.current) || Number(left.remote) - Number(right.remote) || left.name.localeCompare(right.name));
+
+    matchingBranches.forEach((branch) => {
+      if (branch.current) {
+        add(`HEAD \u2192 ${branch.name}`, 'head', '\u25c6', `${branch.name} is currently checked out`);
+      } else if (branch.remote) {
+        add(branch.name, 'remote', '\u25c7', `Remote branch ${branch.name}`);
+      } else if (branch.worktreePath) {
+        add(branch.name, 'worktree', '\u25c6', `${branch.name} is checked out in ${branch.worktreePath}`);
+      } else {
+        add(branch.name, 'branch', '\u25c7', `Local branch ${branch.name}`);
+      }
+    });
+
+    if (status?.oid === commit.hash && !matchingBranches.some((branch) => branch.current)) {
+      add('HEAD (detached)', 'head', '\u25c6', 'Detached HEAD is currently checked out here');
+    }
+
+    const branchNames = new Set((branches || []).map((branch) => branch.name));
+    (commit.refs || []).forEach((raw) => {
+      if (raw.startsWith('tag: ')) {
+        add(raw.slice(5), 'tag', '\u25c7', `Tag ${raw.slice(5)}`);
+        return;
+      }
+      if (raw.endsWith('/HEAD') || raw.includes('/HEAD -> ')) return;
+      const target = raw.includes(' -> ') ? raw.split(' -> ').pop() : raw;
+      if (!target || target === 'HEAD' || branchNames.has(target)) return;
+      add(target, 'branch', '\u25c7', target);
+    });
+    return refs;
+  }
+
+  function resizeLogPanes(containerWidth, currentLeft, currentRight, side, requestedWidth) {
+    const minLeft = 150;
+    const minCenter = 320;
+    const minRight = 220;
+    const gutters = 10;
+    const available = Math.max(0, containerWidth - gutters);
+    let left = Math.max(minLeft, Number(currentLeft) || minLeft);
+    let right = Math.max(minRight, Number(currentRight) || minRight);
+    if (available < minLeft + minCenter + minRight) return { left, right };
+    if (side === 'left') {
+      left = Math.min(Math.max(minLeft, requestedWidth), available - minCenter - right);
+    } else if (side === 'right') {
+      right = Math.min(Math.max(minRight, requestedWidth), available - minCenter - left);
+    }
+    return { left: Math.round(left), right: Math.round(right) };
+  }
+
+  return { layoutCommitGraph, commitRefPresentations, resizeLogPanes };
 });

@@ -70,11 +70,16 @@ test('parseLog preserves commit bodies and decorations', () => {
 
 test('parseBranches distinguishes local and remote refs', () => {
   const output = [
-    'refs/heads/main\0main\0*\0origin/main\0=\0abc123\x002026-11-17T10:00:00+07:00',
-    'refs/remotes/origin/main\0origin/main\0\0\0\0abc123\x002026-11-17T10:00:00+07:00',
+    'refs/heads/main\0main\0*\0origin/main\0<>\0[ahead 2, behind 3]\0abc123\x002026-11-17T10:00:00+07:00\0/work/main\0',
+    'refs/remotes/origin/main\0origin/main\0\0\0\0\0abc123\x002026-11-17T10:00:00+07:00\0\0',
+    'refs/remotes/origin/HEAD\0origin\0\0\0\0\0abc123\x002026-11-17T10:00:00+07:00\0\0refs/remotes/origin/main',
   ].join('\n');
   const branches = parseBranches(output);
+  assert.equal(branches.length, 2);
   assert.equal(branches[0]?.current, true);
   assert.equal(branches[0]?.remote, false);
+  assert.equal(branches[0]?.ahead, 2);
+  assert.equal(branches[0]?.behind, 3);
+  assert.equal(branches[0]?.worktreePath, '/work/main');
   assert.equal(branches[1]?.remote, true);
 });

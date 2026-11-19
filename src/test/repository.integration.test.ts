@@ -79,11 +79,56 @@ test('GitRepository completes local change, history, and conflict workflows', as
     assert.equal(status.changes[0]?.conflicted, true);
     assert.equal(await repository.operation(), 'merge');
 
+    const contentConflicts = await repository.conflicts(status, 'merge');
+    assert.equal(contentConflicts.currentBranch, 'main');
+    assert.equal(contentConflicts.incomingLabel, 'other');
+    assert.equal(contentConflicts.files[0]?.path, 'shared.txt');
+    assert.equal(contentConflicts.files[0]?.ours, 'Modified');
+    assert.equal(contentConflicts.files[0]?.theirs, 'Modified');
+    assert.equal(contentConflicts.files[0]?.oursAvailable, true);
+    assert.equal(contentConflicts.files[0]?.theirsAvailable, true);
+    assert.equal(contentConflicts.files[0]?.simple, false);
+
+    const simpleDeletedConflict = await repository.conflicts({
+      ...status,
+      changes: [{
+        ...status.changes[0]!,
+        indexStatus: 'D',
+        worktreeStatus: 'D',
+      }],
+    });
+    assert.equal(simpleDeletedConflict.files[0]?.simple, true);
+    assert.equal(simpleDeletedConflict.files[0]?.simpleReason, 'bothDeleted');
+
     await repository.useConflictSide('shared.txt', 'theirs');
     status = await repository.status();
     assert.equal(status.changes.find((change) => change.path === 'shared.txt')?.hasStagedChange, true);
     await repository.abortOperation('merge');
     assert.equal(await repository.operation(), undefined);
+
+    await repository.createBranch('delete-other');
+    await unlink(path.join(root, 'shared.txt'));
+    await repository.stageAll();
+    await repository.commit('Delete on other', false);
+    await repository.switchBranch('main');
+    await writeFile(path.join(root, 'shared.txt'), 'main keeps the file\n');
+    await repository.stageAll();
+    await repository.commit('Modify before deletion merge', false);
+    const deleteMerge = await repository.run(['merge', 'delete-other'], { allowFailure: true });
+    assert.notEqual(deleteMerge.exitCode, 0);
+    status = await repository.status();
+    const deleteConflictState = await repository.conflicts(status, 'merge');
+    const deleteConflict = deleteConflictState.files.find((conflict) => conflict.path === 'shared.txt');
+    assert.equal(deleteConflict?.oursAvailable, true);
+    assert.equal(deleteConflict?.theirsAvailable, false);
+    assert.equal(deleteConflict?.theirs, 'Deleted');
+    await repository.useConflictSide('shared.txt', 'theirs', true);
+    await assert.rejects(readFile(path.join(root, 'shared.txt'), 'utf8'));
+    status = await repository.status();
+    assert.equal(status.changes.find((change) => change.path === 'shared.txt')?.conflicted, false);
+    assert.equal(status.changes.find((change) => change.path === 'shared.txt')?.kind, 'deleted');
+    await repository.abortOperation('merge');
+    assert.equal(await readFile(path.join(root, 'shared.txt'), 'utf8'), 'main keeps the file\n');
 
     const log = await repository.log(20);
     assert.ok(log.some((commit) => commit.subject === 'Initial commit'));

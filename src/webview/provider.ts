@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitCommandError, GitRepository } from '../git/repository';
-import type { GitBranch, GitCommit, GitOperation, GitStatus, RepositorySummary } from '../git/types';
+import type { GitBranch, GitCommit, GitConflictState, GitOperation, GitStatus, RepositorySummary } from '../git/types';
 import { GitContentProvider, resolveRepositoryPath } from '../vscode/diffProvider';
 import { resolveMaterialIconPath, type MaterialIconThemeData } from '../vscode/materialIcons';
 import { discoverRepositories } from '../vscode/repositoryDiscovery';
@@ -14,6 +14,7 @@ interface ViewState {
   commits: GitCommit[];
   branches: GitBranch[];
   operation?: GitOperation;
+  conflicts?: GitConflictState;
 }
 
 type ActionName =
@@ -186,12 +187,16 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
 
       const repository = new GitRepository(activeRoot, gitPath);
       const limit = vscode.workspace.getConfiguration('vcSmartGit').get('logLimit', 200);
-      const [status, commits, branches, operation] = await Promise.all([
-        repository.status(),
+      const status = await repository.status();
+      const [commits, branches, operation] = await Promise.all([
         repository.log(limit),
         repository.branches(),
         repository.operation(),
       ]);
+      const hasConflicts = status.changes.some((change) => change.conflicted);
+      const conflicts = hasConflicts || operation
+        ? await repository.conflicts(status, operation)
+        : undefined;
       this.activeRepository = repository;
       this.state = {
         repositories,
@@ -200,6 +205,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
         commits,
         branches,
         ...(operation ? { operation } : {}),
+        ...(conflicts ? { conflicts } : {}),
       };
       await this.context.workspaceState.update('vcSmartGit.activeRoot', activeRoot);
       this.post({
@@ -287,6 +293,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
       case 'markResolved': await this.stage(pathValues(value)); return;
       case 'useOurs': await this.useConflictSide(pathValues(value), 'ours'); return;
       case 'useTheirs': await this.useConflictSide(pathValues(value), 'theirs'); return;
+      case 'resolveSimpleConflicts': await this.resolveSimpleConflicts(pathValues(value)); return;
       case 'openMerge': await this.openMerge(pathValues(value)[0]); return;
       case 'previewDiff': await this.previewDiff(stringValue(value, 'path'), booleanValue(value, 'staged')); return;
       case 'openDiff': await this.openDiff(
@@ -449,10 +456,29 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     if (valid.length > 0) {
       await this.execute(`Accepting ${side}`, async (repo) => {
         for (const filePath of valid) {
-          await repo.useConflictSide(filePath, side);
+          const conflict = this.state.conflicts?.files.find((entry) => entry.path === filePath);
+          const deleted = conflict
+            ? side === 'ours' ? !conflict.oursAvailable : !conflict.theirsAvailable
+            : false;
+          await repo.useConflictSide(filePath, side, deleted);
         }
       });
     }
+  }
+
+  private async resolveSimpleConflicts(paths: readonly string[]): Promise<void> {
+    const requested = new Set(paths);
+    const conflicts = (this.state.conflicts?.files ?? []).filter(
+      (conflict) => conflict.simple && requested.has(conflict.path),
+    );
+    if (conflicts.length === 0) {
+      return;
+    }
+    await this.execute(
+      `Resolving ${conflicts.length} simple conflict${conflicts.length === 1 ? '' : 's'}`,
+      (repo) => repo.resolveSimpleConflicts(conflicts),
+      `${conflicts.length} simple conflict${conflicts.length === 1 ? '' : 's'} resolved`,
+    );
   }
 
   private async openMerge(filePath: string | undefined): Promise<void> {

@@ -86,6 +86,44 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
       </section>
     </section>
 
+    <section id="conflictView" class="conflict-workspace hidden" aria-label="Conflict resolver">
+      <div class="conflict-titlebar">
+        <button class="icon-button conflict-back" data-action="closeConflictResolver" title="Back to Local Changes" aria-label="Back to Local Changes">←</button>
+        <strong>Conflicts</strong>
+        <span class="spacer"></span>
+        <button class="icon-button" data-action="refresh" title="Refresh conflicts">↻</button>
+      </div>
+      <div class="conflict-content">
+        <div id="conflictOperationText" class="conflict-operation"></div>
+        <div class="conflict-actions">
+          <button id="resolveSimpleConflicts" class="conflict-primary-action" data-action="resolveSimpleConflicts" disabled>
+            <span class="magic-icon" aria-hidden="true">✣</span>
+            Resolve Simple Conflicts
+          </button>
+          <span id="simpleConflictHint" class="muted"></span>
+        </div>
+        <div class="conflict-table" role="table" aria-label="Unresolved files">
+          <div class="conflict-columns" role="row">
+            <span>File</span>
+            <span id="oursColumn">Yours</span>
+            <span id="theirsColumn">Theirs</span>
+          </div>
+          <div id="conflictList" class="conflict-list" role="rowgroup"></div>
+          <div id="conflictEmpty" class="conflict-empty hidden">
+            <span class="conflict-complete-icon">✓</span>
+            <strong>All conflicts are resolved</strong>
+            <span>You can now finish the Git operation.</span>
+          </div>
+        </div>
+      </div>
+      <div class="conflict-footer">
+        <button data-action="closeConflictResolver">Close</button>
+        <span class="spacer"></span>
+        <button id="finishConflicts" data-action="finishConflicts" disabled>Accept and Finish</button>
+        <button id="resolveManually" class="primary" data-action="resolveManually">Resolve Manually</button>
+      </div>
+    </section>
+
     <section id="logTab" class="tab-page log-workspace hidden">
       <aside class="branches-pane">
         <div class="pane-toolbar">
@@ -93,6 +131,8 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
         </div>
         <div id="branchTree" class="branch-tree"></div>
       </aside>
+
+      <div class="pane-resizer" data-resizer="left" role="separator" aria-orientation="vertical" aria-label="Resize branches pane" aria-controls="branchTree" title="Drag to resize branches · Double-click to reset" tabindex="0"></div>
 
       <section class="history-pane">
         <div class="pane-toolbar history-toolbar">
@@ -107,6 +147,8 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
         <div class="log-columns" aria-hidden="true"><span>Graph &amp; Subject</span><span>Refs</span><span>Author</span><span>Date</span></div>
         <div id="logList" class="log-list" role="list"></div>
       </section>
+
+      <div class="pane-resizer" data-resizer="right" role="separator" aria-orientation="vertical" aria-label="Resize commit details pane" aria-controls="commitDetails" title="Drag to resize commit details · Double-click to reset" tabindex="0"></div>
 
       <aside class="commit-pane">
         <div class="pane-toolbar">
