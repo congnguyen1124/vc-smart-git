@@ -59,7 +59,7 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       </footer>
     </section>
     <section class="pane pane-result" aria-label="Merge result">
-      <header class="pane-heading"><span class="pane-dot"></span><div><strong>Result</strong><span id="resultMeta" class="muted">Editable working copy</span></div></header>
+      <header class="pane-heading"><span class="pane-dot"></span><div><strong>Result</strong><span id="resultMeta" class="muted">Editable draft</span></div></header>
       <div id="editorBody" class="editor-body">
         <div id="gutter" class="gutter" aria-hidden="true"></div>
         <div id="resultHighlights" class="result-highlights" aria-hidden="true"></div>
@@ -67,9 +67,9 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       </div>
       <p id="resultNote" class="muted empty hidden"></p>
       <footer class="pane-actions result-actions">
-        <button id="useBase" type="button" class="hidden">Use Base</button>
-        <button id="useBoth" type="button">Use Both</button>
-        <button id="undoChoice" type="button">Undo choice</button>
+        <button id="useBase" type="button" class="hidden">Keep Base</button>
+        <button id="keepResult" type="button" class="hidden">Keep Edited Result</button>
+        <button id="undoChoice" type="button" title="Undo the last edit or merge action">Undo</button>
       </footer>
     </section>
     <section class="pane pane-theirs" aria-label="Incoming side">

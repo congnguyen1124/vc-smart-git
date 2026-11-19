@@ -66,10 +66,10 @@ Open **Local Changes → Merge Conflicts → Resolve**. Select a file or choose 
 
 - Compare **Current** and **Incoming** alongside the editable **Result**. Switch to **Full revisions** for continuous source views or **Show base** to see the common ancestor when available.
 - Scroll any pane to follow corresponding lines across the merge editor. Green marks additions, blue marks replacements, and red marks removals or ignored changes.
-- Navigate between conflict blocks and use the inline **»** or **«** to take Current or Incoming. Choose **×** to ignore a side for that block and **↶** to bring it back. When both sides are ignored, Smart Git uses Base if the conflict includes it.
-- Select **Resolve Simple Conflicts** in the merge toolbar to combine non-overlapping changes against Base and accept identical changes. Review the draft in Result and use **Undo choice** to undo the batch.
-- Use **Use Both** to combine the two sides. Diff3 conflicts also offer **Use Base**. **Undo choice** reverses the last block action.
-- Choose **Apply & Stage** once all conflict markers have been cleared. Smart Git checks for external changes to the file and index before saving. The active Git operation can be finished separately after all files are resolved.
+- Result starts from Base in unresolved regions and includes changes Git already merged. When the ancestor cannot be verified, choose a side or type the result you want.
+- Use the inline **»** or **«** to accept one side of a conflict. The other side remains available. Accept it to append its changes, or select **×** to ignore it. Ignoring both sides keeps the verified Base.
+- Select **Resolve Simple Conflicts** to combine non-overlapping changes against Base and accept identical changes. Edit Result directly and select **Keep Edited Result** to confirm a manual resolution. **Undo** restores the previous edit or merge action.
+- Choose **Apply & Stage** after processing all conflicts. Smart Git checks for external changes to the file and index before saving. You can finish the active Git operation after resolving all files.
 - Accept an entire revision or a deletion when that is the intended result. Files that cannot be edited as UTF-8 text use these whole-file actions.
 - Use **Resolve Simple Conflicts** from the conflict list when both sides are identical or both deleted.
 

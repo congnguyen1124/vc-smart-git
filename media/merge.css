@@ -188,7 +188,7 @@ h1, #fileLocation { overflow: hidden; text-overflow: ellipsis; white-space: nowr
   min-height: var(--line-height);
   white-space: pre;
 }
-.code-line:is(.diff-added, .diff-removed, .diff-modified),
+.code-line:is(.diff-added, .diff-removed, .diff-modified, .diff-conflict),
 .result-highlights > div:is(.diff-added, .diff-removed, .diff-modified, .diff-conflict) {
   box-shadow: inset 2px 0 0 var(--diff-accent);
   background-color: var(--diff-background);
@@ -196,14 +196,16 @@ h1, #fileLocation { overflow: hidden; text-overflow: ellipsis; white-space: nowr
 .code-line.diff-gap {
   background-image: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--muted) 6%, transparent) 5px 10px);
 }
-.deletion-boundary { position: relative; }
-.deletion-boundary::before {
+.deletion-boundary, .processed-boundary, .conflict-boundary { position: relative; }
+:is(.deletion-boundary, .processed-boundary, .conflict-boundary)::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;
   border-top: 1px dashed var(--deletion);
   pointer-events: none;
 }
+.processed-boundary::before { border-top: 1px dotted var(--muted); }
+.conflict-boundary::before { border-top: 1px dashed var(--warning); }
 .has-merge-rail .code-line { grid-template-columns: var(--gutter-width) 1fr 46px; }
 .pane-theirs .has-merge-rail .code-line { grid-template-columns: 46px var(--gutter-width) 1fr; }
 .pane-theirs .merge-rail { grid-row: 1; grid-column: 1; left: 0; right: auto; }
@@ -217,10 +219,9 @@ h1, #fileLocation { overflow: hidden; text-overflow: ellipsis; white-space: nowr
   align-items: center;
   background: var(--canvas);
 }
-.code-line:is(.diff-added, .diff-removed, .diff-modified) .merge-rail {
+.code-line:is(.diff-added, .diff-removed, .diff-modified, .diff-conflict) .merge-rail {
   background: linear-gradient(var(--diff-background), var(--diff-background)), var(--canvas);
 }
-.code-line.ignored .code-text { opacity: .55; }
 .merge-inline {
   width: 23px;
   min-height: 21px;
@@ -232,7 +233,7 @@ h1, #fileLocation { overflow: hidden; text-overflow: ellipsis; white-space: nowr
   font: 700 16px/1 var(--vscode-font-family, system-ui, sans-serif);
 }
 .merge-inline-ignore { color: var(--vscode-errorForeground, #f08086); }
-.ignored .merge-inline-ignore { color: var(--muted); }
+.merge-inline-take { color: var(--success); }
 .merge-inline:hover:not(:disabled), .merge-inline:focus-visible { border-color: currentColor; }
 .line-number, .gutter { color: var(--vscode-editorLineNumber-foreground, var(--muted)); text-align: right; user-select: none; }
 .line-number { padding-right: 8px; }

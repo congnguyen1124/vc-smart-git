@@ -3,8 +3,9 @@
 
   const vscode = acquireVsCodeApi();
   const {
-    scanConflicts, chooseBlock, ignoreBlockSide, conflictKey, resolveSimpleBlock,
-    splitLines, changeColors, createPaneLayout, mapRow, paneRow,
+    scanConflicts, createDraft, isPending, canIgnoreSide, canResolveSimple, resolveSimpleDraft,
+    resolveBlock, editDraft, draftRegions,
+    splitLines, changeColors, sourceRanges, createPaneLayout, mapRow, paneRow,
   } = globalThis.SmartGitMerge;
   const byId = (id) => document.getElementById(id);
   const editor = byId('result');
@@ -17,14 +18,16 @@
     return node;
   };
   let file;
-  let scan = { blocks: [], malformed: false };
+  let draft;
+  let initialDraft;
+  let regions;
+  let pending = [];
+  let hasMarkers = false;
+  let inputSelection;
   let activeIndex = 0;
   let showRevision = false;
   let showBase = false;
   let busy = false;
-  let ignoredSides = [];
-  let conflictBases;
-  let simpleResolutions = [];
   let resolvedNotice = '';
   let revisions;
   let comparedText;
@@ -32,6 +35,7 @@
   let resultColors;
   let rowHeight = 21;
   const undo = [];
+  const redo = [];
   const sides = ['ours', 'theirs'].map((side) => ({
     side,
     scroll: byId(`${side}Code`),
@@ -62,22 +66,32 @@
 
   function loadRevisions() {
     const base = file.base.text !== undefined || !file.base.present ? splitLines(file.base.text) : undefined;
-    return Object.fromEntries(['ours', 'theirs', 'base'].map((key) => {
+    const working = (file.working.text ?? '').split('\n');
+    const conflicts = draft.blocks.map(({ original }) => original);
+    const entries = ['ours', 'theirs', 'base'].map((key) => {
       const version = file[key];
       const lines = splitLines(version.text);
       const columns = lines.reduce((width, line) => Math.max(width, line.replaceAll('\t', '    ').length), 0);
       const colors = version.text !== undefined || !version.present ? changeColors(base, lines) : changeColors();
-      return [key, { ...version, lines, columns, colors }];
-    }));
+      const ranges = conflicts.length ? sourceRanges(working, lines, conflicts) : [];
+      return [key, { ...version, lines, columns, colors, ranges }];
+    });
+    conflicts.forEach((_, index) => {
+      const ranges = entries.map(([, revision]) => revision.ranges[index]);
+      const minimum = Math.max(1, ...ranges.map(({ start, end }) => end - start));
+      for (const range of ranges) range.minimum = minimum;
+    });
+    return Object.fromEntries(entries);
   }
 
   function updateLayouts() {
-    const edited = comparedText !== editor.value;
+    const edited = comparedText !== draft.text;
     if (edited) {
-      comparedText = editor.value;
-      resultLines = editor.value.split('\n');
+      comparedText = draft.text;
+      resultLines = draft.text.split('\n');
+      regions = draftRegions(draft);
       const base = revisions.base.text !== undefined || !revisions.base.present ? revisions.base.lines : undefined;
-      resultColors = changeColors(base, splitLines(editor.value));
+      resultColors = changeColors(base, splitLines(draft.text));
     }
     rowHeight = parseFloat(getComputedStyle(editor).lineHeight) || 21;
     for (const pane of sides) {
@@ -86,7 +100,7 @@
       if (edited || pane.revision !== revision || pane.pad !== pad) {
         pane.revision = revision;
         pane.pad = pad;
-        pane.layout = createPaneLayout(resultLines, revision.lines, pad, scan.blocks);
+        pane.layout = createPaneLayout(resultLines, revision.lines, pad, regions, revision.ranges);
         pane.sheet.style.height = `${pane.layout.height * rowHeight}px`;
         pane.sheet.style.setProperty('--columns', String(revision.columns));
         pane.note.textContent = revision.text === undefined
@@ -101,13 +115,14 @@
 
   function blockAt(row) {
     let low = 0;
-    let high = scan.blocks.length;
+    let high = regions.length;
     while (low < high) {
       const mid = (low + high) >>> 1;
-      if (scan.blocks[mid].endLine < row) low = mid + 1;
+      const { startLine, endLine } = regions[mid];
+      if (Math.max(startLine + 1, endLine) <= row) low = mid + 1;
       else high = mid;
     }
-    return scan.blocks[low]?.startLine <= row ? low : -1;
+    return regions[low]?.startLine <= row ? low : -1;
   }
 
   function applyChangeStyle(node, kind) {
@@ -125,55 +140,51 @@
     pane.first = first;
     pane.last = last;
     const hasRail = scroll.classList.contains('has-merge-rail');
-    const block = scan.blocks[activeIndex];
-    const ignored = ignoredSides[activeIndex];
-    const actionRow = block && hasRail
-      ? Math.min(layout.height - 1, Math.floor(mapRow(layout, block.startLine, false))) : -1;
     const fragment = document.createDocumentFragment();
     for (let row = first; row < last; row += 1) {
       const position = paneRow(layout, row);
       const source = position?.source ?? revision.lines.length;
-      const resultLine = Math.floor(mapRow(layout, row, true));
-      const blockIndex = blockAt(resultLine);
-      const isIgnored = hasRail && blockIndex >= 0 && ignoredSides[blockIndex] === side;
+      const block = hasRail && draft.blocks[position?.conflict];
+      const processed = Boolean(block && block[side] !== null);
       const gap = position?.gap;
       const removed = revision.colors.removed.has(source) && paneRow(layout, row - 1)?.source !== source;
       if (!position && !removed) continue;
-      const line = element('div', `code-line${gap ? ' diff-gap' : ''}${isIgnored ? ' ignored' : ''}`);
-      applyChangeStyle(line, isIgnored || (gap && revision.colors.removed.has(source))
-        ? 'removed' : !gap && revision.colors.kinds[source]);
+      const trailingBlank = !block && row === layout.height - 1 && resultLines.at(-1) === '';
+      const line = element('div', `code-line${gap && !trailingBlank ? ' diff-gap' : ''}`);
+      if (!processed) {
+        applyChangeStyle(line, gap && revision.colors.removed.has(source) ? 'removed' : !gap && revision.colors.kinds[source]);
+        if (block && !line.title) line.classList.add('diff-conflict');
+      }
       if (removed) {
         const count = revision.colors.removed.get(source);
         line.classList.add('deletion-boundary');
         line.title = `${count} ${count === 1 ? 'line' : 'lines'} removed`;
       }
-      if (isIgnored) line.title = 'Ignored for this conflict';
+      if (processed && position.first) {
+        line.classList.add('processed-boundary');
+        line.title = block[side] === 'ignored' ? 'Ignored for this conflict' : 'Processed for this conflict';
+      }
       line.append(element('span', 'line-number', position && !gap ? String(source + 1) : ''));
       const contents = element('span', 'code-text');
       if (position && !gap) appendCode(contents, revision.lines[source]);
       line.append(contents);
       if (hasRail) {
         const rail = element('span', 'merge-rail');
-        if (row === actionRow) appendBlockActions(rail, {
-          side, ignored: ignored === side,
-          canIgnore: Boolean(ignoreBlockSide(block, ignored, side)),
-          usesBase: Boolean(ignored && ignored !== side && block.base !== undefined),
-          busy,
-        });
+        if (block && position.first && !processed) appendBlockActions(rail, side, block, position.conflict);
         line.append(rail);
       }
       fragment.append(line);
     }
     rows.style.top = `${first * rowHeight}px`;
-    const focused = rows.contains(document.activeElement) ? document.activeElement.dataset.mergeAction : undefined;
+    const focused = rows.contains(document.activeElement) ? { ...document.activeElement.dataset } : undefined;
     rows.replaceChildren(fragment);
     if (focused) {
-      const control = rows.querySelector(`[data-merge-action="${focused}"]:enabled`);
-      (control || scroll).focus({ preventScroll: true });
+      const control = rows.querySelector(`[data-merge-action="${focused.mergeAction}"][data-merge-conflict="${focused.mergeConflict}"]:enabled`);
+      if (control) control.focus({ preventScroll: true });
     }
   }
 
-  function appendBlockActions(rail, { side, ignored, canIgnore, usesBase, busy }) {
+  function appendBlockActions(rail, side, block, index) {
     const left = side === 'ours';
     const label = left ? 'Current' : 'Incoming';
     const button = (action, icon, title, disabled) => {
@@ -181,16 +192,18 @@
       control.type = 'button';
       control.dataset.mergeAction = action;
       control.dataset.mergeSide = side;
+      control.dataset.mergeConflict = String(index);
       control.setAttribute('aria-label', title);
       control.title = title;
       control.disabled = disabled;
       return control;
     };
-    const apply = button('take', left ? '»' : '«', `Use ${label} for this conflict`, ignored || busy);
-    const ignoreLabel = ignored ? `Restore ${label} for this conflict`
-      : `Ignore ${label} for this conflict${usesBase ? ' and use Base' : ''}`;
-    const ignore = button('ignore', ignored ? '↶' : '×', ignoreLabel, !canIgnore || busy);
-    if (!canIgnore) ignore.title = 'Choose the remaining side or edit Result when Base is unavailable';
+    const append = block.manual || block[left ? 'theirs' : 'ours'] === 'accepted';
+    const apply = button('take', append ? (left ? '↳' : '↲') : (left ? '»' : '«'),
+      `${append ? 'Append' : 'Accept'} ${label} in Result`, busy);
+    const canIgnore = canIgnoreSide(block, side);
+    const ignore = button('ignore', '×', `Ignore ${label} for this conflict`, !canIgnore || busy);
+    if (!canIgnore) ignore.title = 'Base unavailable. Edit Result or accept this side.';
     rail.append(...(left ? [ignore, apply] : [apply, ignore]));
   }
 
@@ -206,14 +219,20 @@
     const numbers = [];
     const backgrounds = [];
     for (let line = first; line < last; line += 1) {
-      const block = blockAt(line);
-      const number = element('div', block === activeIndex ? 'active-marker' : block >= 0 ? 'marker' : '', String(line + 1));
+      const index = blockAt(line);
+      const block = draft.blocks[index];
+      const unresolved = block && isPending(block);
+      const number = element('div', unresolved ? (index === activeIndex ? 'active-marker' : 'marker') : '', String(line + 1));
       const background = element('div', '');
-      const kind = block < 0 ? resultColors.kinds[line] : undefined;
+      const kind = resultColors.kinds[line];
       applyChangeStyle(number, kind);
       applyChangeStyle(background, kind);
-      if (block >= 0) background.classList.add('diff-conflict');
-      if (block < 0 && resultColors.removed.has(line)) {
+      const removed = resultColors.removed.has(line);
+      if (unresolved && !kind && !removed) {
+        if (regions[index].endLine > line) background.classList.add('diff-conflict');
+        else background.classList.add('conflict-boundary');
+      }
+      if (removed) {
         number.classList.add('deletion-boundary');
         background.classList.add('deletion-boundary');
       }
@@ -228,11 +247,14 @@
     if (file.working.text !== undefined) {
       const pane = paneFor.get(source);
       const row = source.scrollTop / rowHeight;
+      const conflict = pane ? paneRow(pane.layout, Math.floor(row))?.conflict : undefined;
       const resultRow = pane ? mapRow(pane.layout, row, true) : row;
       for (const target of [editor, ...sides.map(({ scroll }) => scroll)]) {
         if (target === source) continue;
         const other = paneFor.get(target);
-        const targetRow = other ? mapRow(other.layout, resultRow, false) : resultRow;
+        const targetBlock = other?.layout.conflicts[conflict];
+        const targetRow = targetBlock ? targetBlock.start + row - pane.layout.conflicts[conflict].start
+          : other ? mapRow(other.layout, resultRow, false) : resultRow;
         target.scrollTop = targetRow * rowHeight;
         scrollPositions.set(target, target.scrollTop);
       }
@@ -250,7 +272,7 @@
   }
 
   function goToBlock() {
-    const block = scan.blocks[activeIndex];
+    const block = regions[activeIndex];
     if (!block) return;
     editor.scrollTop = Math.max(0, (block.startLine - 5) * rowHeight);
     scrollPositions.set(editor, editor.scrollTop);
@@ -259,44 +281,44 @@
 
   function render() {
     if (!file) return;
-    if (comparedText !== editor.value) {
-      scan = scanConflicts(editor.value, file.markerSize);
-      simpleResolutions = scan.malformed ? [] : scan.blocks.map((block) => {
-        const replacement = resolveSimpleBlock({ ...block, base: block.base ?? conflictBases.get(conflictKey(block)) });
-        if (replacement === undefined) return undefined;
-        const remaining = scanConflicts(replacement, file.markerSize);
-        return remaining.malformed || remaining.blocks.length ? undefined : replacement;
-      });
+    if (comparedText !== draft.text) {
+      const markers = scanConflicts(draft.text, file.markerSize);
+      hasMarkers = markers.malformed || markers.blocks.length > 0;
     }
-    const count = scan.blocks.length;
-    activeIndex = Math.max(0, Math.min(activeIndex, count - 1));
-    const block = scan.blocks[activeIndex];
-    const ignored = ignoredSides[activeIndex];
-    const simpleCount = simpleResolutions.filter((replacement, index) => replacement !== undefined && !ignoredSides[index]).length;
+    pending = draft.blocks.flatMap((block, index) => isPending(block) ? [index] : []);
+    const count = pending.length;
+    if (count && !pending.includes(activeIndex)) activeIndex = pending.find((index) => index > activeIndex) ?? pending[0];
+    const current = count ? draft.blocks[activeIndex] : undefined;
+    const simpleCount = draft.blocks.filter(canResolveSimple).length;
     const editable = file.working.text !== undefined;
     editor.readOnly = busy || !editable;
-    const ready = editable && !count && !scan.malformed;
-    const title = !editable ? 'Choose a revision' : scan.malformed ? 'Check conflict markers'
+    const ready = editable && !count && !hasMarkers;
+    const title = !editable ? 'Choose a revision' : hasMarkers ? 'Check conflict markers'
       : count ? `${count} unresolved` : 'Ready to stage';
     setText('progress', title);
     byId('progress').className = `status ${ready ? 'resolved' : 'unresolved'}`;
-    setText('position', count ? `Conflict ${activeIndex + 1} of ${count}` : 'No conflict blocks');
+    setText('position', count ? `Conflict ${pending.indexOf(activeIndex) + 1} of ${count}` : 'No unresolved conflicts');
     const oursLabel = file.oursLabel && file.oursLabel !== '(detached)' ? file.oursLabel : 'Git index · Stage 2';
     const theirsLabel = file.theirsLabel || 'Git index · Stage 3';
     setText('oursName', showBase ? 'Base' : file.operation === 'rebase' ? 'Rebase target' : 'Current');
     setText('oursMeta', showBase ? 'Common ancestor' : oursLabel);
     setText('theirsMeta', theirsLabel);
-    setText('resultMeta', editable && editor.value !== file.working.text ? 'Edited in this tab' : 'Editable working copy');
-    setText('footerHelp', file.working.note || resolvedNotice || (scan.malformed ? 'Remove or repair the incomplete conflict markers in Result.'
-      : ignored ? `${ignored === 'ours' ? 'Current' : 'Incoming'} ignored for this block. Choose a resolution or edit Result.`
-        : count ? 'Use the arrows to take a side, or × to ignore it for this block.'
-        : 'Apply & Stage saves the result and marks this file as resolved.'));
+    setText('resultMeta', draft !== initialDraft ? 'Edited draft' : 'Editable draft');
+    const oursAppend = current?.manual || current?.theirs === 'accepted';
+    const theirsAppend = current?.manual || current?.ours === 'accepted';
+    setText('useOurs', oursAppend ? 'Append Current →' : 'Accept Current →');
+    setText('useTheirs', theirsAppend ? '← Append Incoming' : '← Accept Incoming');
+    setText('footerHelp', file.working.note || (hasMarkers ? 'Remove the Git conflict markers in Result before staging.'
+      : !count ? 'All conflicts processed. Review Result, then apply and stage.'
+        : resolvedNotice || (current.base === undefined && !current.manual && current.ours !== 'accepted' && current.theirs !== 'accepted'
+          ? 'Base is unavailable for this conflict. Choose a side or edit Result.'
+          : 'Accept or ignore each side. Accepting the second side appends its changes.')));
     const disabled = {
       previous: count < 2, next: count < 2, toggleRevision: !editable, toggleBase: !file.base.present,
       resolveSimple: !editable || !simpleCount,
-      useOurs: !block || ignored === 'ours', useTheirs: !block || ignored === 'theirs',
-      useBoth: !block || Boolean(ignored), useBase: block?.base === undefined,
-      undoChoice: undo.at(-1)?.after !== editor.value, apply: !ready,
+      useOurs: current?.ours !== null, useTheirs: current?.theirs !== null,
+      useBase: current?.base === undefined, keepResult: !current?.manual,
+      undoChoice: !undo.length, apply: !ready,
       acceptOurs: false, acceptTheirs: false,
     };
     for (const [id, unavailable] of Object.entries(disabled)) byId(id).disabled = busy || unavailable;
@@ -310,65 +332,52 @@
     setText('toggleBase', showBase ? 'Show current' : 'Show base');
     setText('acceptOurs', file.ours.present ? 'Entire Current…' : 'Accept Deletion…');
     setText('acceptTheirs', file.theirs.present ? 'Entire Incoming…' : 'Accept Deletion…');
-    show('useBase', block?.base !== undefined);
+    show('useBase', current?.base !== undefined);
+    show('keepResult', Boolean(current?.manual));
     updateLayouts();
     syncScroll(editor, true);
   }
 
-  function choose(choice) {
-    const block = scan.blocks[activeIndex];
-    if (!block || busy) return;
-    const replacement = choice === 'base' ? block.base : chooseBlock(block, choice);
-    if (replacement === undefined) return;
-    replaceBlock(block, replacement);
+  function selection() {
+    return { start: editor.selectionStart, end: editor.selectionEnd };
   }
 
-  function changeBlock(update) {
-    const before = editor.value;
-    const ignored = [...ignoredSides];
-    const index = activeIndex;
-    resolvedNotice = '';
-    update();
-    undo.push({ before, after: editor.value, index, ignored });
-    if (undo.length > 10) undo.shift();
+  function writeResult(text, position) {
+    const top = editor.scrollTop;
+    const left = editor.scrollLeft;
+    editor.value = text;
+    editor.setSelectionRange(position.start, position.end);
+    editor.scrollTop = top;
+    editor.scrollLeft = left;
+  }
+
+  function update(next, index = activeIndex, notice = '', previousSelection = selection()) {
+    if (next === draft) return;
+    undo.push({ draft, index: activeIndex, selection: previousSelection });
+    if (undo.length > 20) undo.shift();
+    redo.length = 0;
+    draft = next;
+    activeIndex = index;
+    resolvedNotice = notice;
+    if (editor.value !== draft.text) writeResult(draft.text, previousSelection);
     render();
   }
 
-  function replaceBlock(block, replacement) {
-    changeBlock(() => {
-      editor.setRangeText(replacement, block.start, block.end, 'preserve');
-      ignoredSides.splice(activeIndex, 1);
-    });
-    goToBlock();
+  function restoreHistory(from, to) {
+    if (busy || !from.length) return;
+    const previous = from.pop();
+    to.push({ draft, index: activeIndex, selection: selection() });
+    draft = previous.draft;
+    activeIndex = previous.index;
+    resolvedNotice = '';
+    writeResult(draft.text, previous.selection);
+    render();
   }
 
   function resolveSimple() {
     if (byId('resolveSimple').disabled) return;
-    changeBlock(() => {
-      const workingText = editor.value;
-      const parts = [];
-      const remainingIgnored = [];
-      let start = 0;
-      let resolved = 0;
-      let first = activeIndex;
-      for (const [index, block] of scan.blocks.entries()) {
-        const replacement = simpleResolutions[index];
-        if (replacement === undefined || ignoredSides[index]) {
-          remainingIgnored.push(ignoredSides[index]);
-          continue;
-        }
-        parts.push(workingText.slice(start, block.start), replacement);
-        start = block.end;
-        resolved += 1;
-        if (index < activeIndex) first -= 1;
-      }
-      parts.push(workingText.slice(start));
-      editor.setRangeText(parts.join(''), 0, workingText.length, 'preserve');
-      activeIndex = first;
-      ignoredSides = remainingIgnored;
-      resolvedNotice = `Resolved ${resolved} simple conflict${resolved === 1 ? '' : 's'} in Result.`;
-    });
-    goToBlock();
+    const { draft: nextDraft, count } = resolveSimpleDraft(draft);
+    update(nextDraft, activeIndex, `Resolved ${count} simple conflict${count === 1 ? '' : 's'} in Result.`);
     const next = !byId('apply').disabled ? byId('apply') : byId('undoChoice');
     next.focus({ preventScroll: true });
   }
@@ -376,24 +385,16 @@
   function inlineAction(event) {
     const button = event.target.closest('[data-merge-action]');
     if (!button || busy) return;
-    const block = scan.blocks[activeIndex];
+    const index = Number(button.dataset.mergeConflict);
     const side = button.dataset.mergeSide;
-    if (!block) return;
-    if (button.dataset.mergeAction === 'take') {
-      choose(side);
-    } else {
-      const decision = ignoreBlockSide(block, ignoredSides[activeIndex], side);
-      if (!decision) return;
-      if (decision.replacement !== undefined) replaceBlock(block, decision.replacement);
-      else changeBlock(() => { ignoredSides[activeIndex] = decision.ignored; });
-    }
-    const next = document.querySelector(`[data-merge-action="${button.dataset.mergeAction}"][data-merge-side="${side}"]:enabled`);
+    update(resolveBlock(draft, index, button.dataset.mergeAction, side), index);
+    const next = document.querySelector(`[data-merge-conflict="${index}"][data-merge-action="take"]:enabled`);
     (next || (!byId('apply').disabled ? byId('apply') : byId('undoChoice'))).focus({ preventScroll: true });
   }
 
   function move(offset) {
-    if (scan.blocks.length < 2) return;
-    activeIndex = (activeIndex + offset + scan.blocks.length) % scan.blocks.length;
+    if (pending.length < 2) return;
+    activeIndex = pending[(pending.indexOf(activeIndex) + offset + pending.length) % pending.length];
     render();
     goToBlock();
   }
@@ -409,25 +410,15 @@
   byId('previous').onclick = () => move(-1);
   byId('next').onclick = () => move(1);
   byId('resolveSimple').onclick = resolveSimple;
-  byId('useOurs').onclick = () => choose('ours');
-  byId('useTheirs').onclick = () => choose('theirs');
-  byId('useBoth').onclick = () => choose('both');
-  byId('useBase').onclick = () => choose('base');
+  byId('useOurs').onclick = () => update(resolveBlock(draft, activeIndex, 'take', 'ours'));
+  byId('useTheirs').onclick = () => update(resolveBlock(draft, activeIndex, 'take', 'theirs'));
+  byId('keepResult').onclick = () => update(resolveBlock(draft, activeIndex, 'keep'));
+  byId('useBase').onclick = () => update(resolveBlock(draft, activeIndex, 'base'));
   byId('acceptOurs').onclick = () => submit('acceptSide', { side: 'ours' });
   byId('acceptTheirs').onclick = () => submit('acceptSide', { side: 'theirs' });
-  byId('close').onclick = () => submit('close', { dirty: Boolean(file && !editor.readOnly && editor.value !== file.working.text) });
+  byId('close').onclick = () => submit('close', { dirty: draft !== initialDraft });
   byId('apply').onclick = () => submit('apply', { text: editor.value });
-  byId('undoChoice').onclick = () => {
-    const choice = undo.at(-1);
-    if (choice?.after !== editor.value) return;
-    undo.pop();
-    editor.value = choice.before;
-    resolvedNotice = '';
-    ignoredSides = choice.ignored;
-    activeIndex = choice.index;
-    render();
-    goToBlock();
-  };
+  byId('undoChoice').onclick = () => restoreHistory(undo, redo);
   byId('toggleRevision').onclick = () => { showRevision = !showRevision; render(); };
   byId('toggleBase').onclick = () => { showBase = !showBase; render(); };
   const resize = new ResizeObserver(() => {
@@ -441,24 +432,48 @@
     pane.scroll.addEventListener('scroll', onScroll, { passive: true });
     resize.observe(pane.scroll);
   }
+  editor.addEventListener('beforeinput', (event) => {
+    if (event.cancelable && (event.inputType === 'historyUndo' || event.inputType === 'historyRedo')) {
+      event.preventDefault();
+      if (event.inputType === 'historyUndo') restoreHistory(undo, redo);
+      else restoreHistory(redo, undo);
+      return;
+    }
+    inputSelection = selection();
+  });
   editor.addEventListener('input', () => {
-    ignoredSides = [];
-    resolvedNotice = '';
-    undo.length = 0;
-    render();
+    const before = inputSelection;
+    const next = editDraft(draft, editor.value, before, editor.selectionEnd);
+    inputSelection = undefined;
+    const index = next.blocks.findIndex((block) => isPending(block) && block.start <= editor.selectionStart &&
+      block.end >= editor.selectionStart);
+    update(next, index >= 0 ? index : activeIndex, '', before);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key !== 'z' && key !== 'y') return;
+    const reverse = key === 'y' || event.shiftKey;
+    event.preventDefault();
+    if (reverse) restoreHistory(redo, undo);
+    else restoreHistory(undo, redo);
   });
   editor.addEventListener('scroll', onScroll, { passive: true });
   resize.observe(editor);
   window.addEventListener('message', ({ data }) => {
     if (data.type === 'file') {
       file = data;
+      initialDraft = createDraft(file.working.text ?? '', file.markerSize,
+        new Map(file.conflictBases ?? []), !file.base.present);
+      draft = initialDraft;
       revisions = loadRevisions();
-      conflictBases = new Map(file.conflictBases ?? []);
       comparedText = undefined;
       setText('fileName', file.path.split('/').pop());
       setText('fileLocation', `${file.repository} / ${file.path}`);
       byId('fileLocation').title = byId('fileLocation').textContent;
-      editor.value = file.working.text ?? '';
+      editor.value = draft.text;
+      const start = draft.blocks[0]?.start ?? 0;
+      editor.setSelectionRange(start, start);
       editor.readOnly = file.working.text === undefined;
       setText('resultNote', file.working.note || '');
       show('editorBody', !editor.readOnly);

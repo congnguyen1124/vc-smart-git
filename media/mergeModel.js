@@ -39,17 +39,161 @@
     return { blocks, malformed: malformed || Boolean(block), lineCount: lines.length };
   }
 
-  function chooseBlock(block, choice) {
-    if (choice === 'both') return block.ours + block.theirs;
-    if (choice === 'theirs') return block.theirs;
-    return block.ours;
+  function createDraft(text, markerSize, bases, noAncestor) {
+    const scan = scanConflicts(text, markerSize);
+    if (scan.malformed) return { text, blocks: [] };
+    const parts = [];
+    let previousEnd = 0;
+    let offset = 0;
+    const blocks = scan.blocks.map((original) => {
+      const base = original.base ?? bases.get(conflictKey(original)) ?? (noAncestor ? '' : undefined);
+      const context = text.slice(previousEnd, original.start);
+      const start = offset + context.length;
+      const end = start + (base?.length ?? 0);
+      const simple = resolveSimpleBlock({ ...original, base });
+      const candidate = simple === undefined ? undefined : scanConflicts(simple, markerSize);
+      parts.push(context, base ?? '');
+      previousEnd = original.end;
+      offset = end;
+      return {
+        original, base, start, end, ours: null, theirs: null, manual: false,
+        simple: candidate?.malformed || candidate?.blocks.length ? undefined : simple,
+      };
+    });
+    parts.push(text.slice(previousEnd));
+    return { text: parts.join(''), blocks };
   }
 
-  function ignoreBlockSide(block, ignored, side) {
-    if (ignored === side) return { ignored: undefined };
-    if (!ignored) return { ignored: side };
-    if (block.base !== undefined) return { replacement: block.base };
-    return undefined;
+  function isPending(block) {
+    return block.ours === null || block.theirs === null;
+  }
+
+  function canIgnoreSide(block, side) {
+    const other = side === 'ours' ? block.theirs : block.ours;
+    return block[side] === null && (other !== 'ignored' || block.base !== undefined || block.manual);
+  }
+
+  function canResolveSimple(block) {
+    return block.simple !== undefined && !block.manual && block.ours === null && block.theirs === null;
+  }
+
+  function resolveSimpleDraft(draft) {
+    const parts = [];
+    let cursor = 0;
+    let shift = 0;
+    let count = 0;
+    const blocks = draft.blocks.map((block) => {
+      const start = block.start + shift;
+      if (!canResolveSimple(block)) return shift ? { ...block, start, end: block.end + shift } : block;
+      parts.push(draft.text.slice(cursor, block.start), block.simple);
+      cursor = block.end;
+      const end = start + block.simple.length;
+      shift += block.simple.length - (block.end - block.start);
+      count += 1;
+      return { ...block, start, end, ours: 'processed', theirs: 'processed' };
+    });
+    parts.push(draft.text.slice(cursor));
+    return { draft: count ? { text: parts.join(''), blocks } : draft, count };
+  }
+
+  function resolveBlock(draft, index, choice, side) {
+    const block = draft.blocks[index];
+    if (!block || !isPending(block)) return draft;
+    let replacement = draft.text.slice(block.start, block.end);
+    let next = { ...block };
+    if (choice === 'take' && block[side] === null) {
+      const content = block.original[side];
+      const other = side === 'ours' ? block.theirs : block.ours;
+      const append = block.manual || other === 'accepted';
+      if (!append) replacement = content;
+      else if (content && (other !== 'accepted' || replacement !== content)) {
+        replacement += replacement && !replacement.endsWith('\n') ? '\n' + content : content;
+      }
+      next[side] = 'accepted';
+    } else if (choice === 'ignore' && canIgnoreSide(block, side)) {
+      next[side] = 'ignored';
+    } else if (choice === 'keep') {
+      next = { ...block, ours: block.ours ?? 'processed', theirs: block.theirs ?? 'processed' };
+    } else if (choice === 'base' && block.base !== undefined) {
+      replacement = block.base;
+      next = { ...block, ours: 'ignored', theirs: 'ignored' };
+    } else {
+      return draft;
+    }
+    const end = block.start + replacement.length;
+    const shift = end - block.end;
+    return {
+      text: draft.text.slice(0, block.start) + replacement + draft.text.slice(block.end),
+      blocks: draft.blocks.map((entry, offset) => {
+        if (offset < index) return entry;
+        if (offset === index) return { ...next, end };
+        return shift ? { ...entry, start: entry.start + shift, end: entry.end + shift } : entry;
+      }),
+    };
+  }
+
+  function editDraft(draft, text, selection, caret) {
+    const previous = draft.text;
+    if (previous === text) return draft;
+    const shift = text.length - previous.length;
+    let start = Math.min(selection?.start ?? 0, caret);
+    let end = Math.max(selection?.end ?? 0, caret - shift);
+    let newEnd = end + shift;
+    // beforeinput covers normal typing and selection replacement. The text
+    // comparison handles drag/drop, composition and other multi-line edits.
+    if (!selection || end > previous.length || newEnd < start ||
+      previous.slice(0, start) !== text.slice(0, start) || previous.slice(end) !== text.slice(newEnd)) {
+      start = 0;
+      end = previous.length;
+      newEnd = text.length;
+      while (start < end && start < newEnd && previous[start] === text[start]) start += 1;
+      while (end > start && newEnd > start && previous[end - 1] === text[newEnd - 1]) {
+        end -= 1;
+        newEnd -= 1;
+      }
+    }
+    let assigned = false;
+    const blocks = draft.blocks.map((block) => {
+      const atEmptyBlock = block.start === start && block.end === start;
+      if (atEmptyBlock && assigned) return { ...block, start: newEnd, end: newEnd };
+      if (block.end <= start && (!atEmptyBlock || !isPending(block))) return block;
+      if (block.start >= end && (block.start !== start || assigned)) {
+        return { ...block, start: block.start + shift, end: block.end + shift };
+      }
+      const first = !assigned;
+      assigned = true;
+      return {
+        ...block, manual: true,
+        start: block.start < start ? block.start : first ? start : newEnd,
+        end: block.end >= end ? block.end + shift : newEnd,
+      };
+    });
+    return { text, blocks };
+  }
+
+  function draftRegions({ text, blocks }) {
+    const offsets = [0];
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === '\n') offsets.push(index + 1);
+    }
+    let previousEnd = 0;
+    function rowAt(offset) {
+      let low = 0;
+      let high = offsets.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (offsets[middle] <= offset) low = middle + 1;
+        else high = middle;
+      }
+      return low - 1;
+    }
+    return blocks.map(({ start, end }) => {
+      const startLine = Math.max(previousEnd, rowAt(start));
+      const last = rowAt(end);
+      const endLine = Math.max(startLine, start === end || offsets[last] === end ? last : last + 1);
+      previousEnd = endLine;
+      return { startLine, endLine };
+    });
   }
 
   function splitLines(text) {
@@ -265,8 +409,8 @@
     return low;
   }
 
-  // Result contains both alternatives and Git's marker lines. Lay out each
-  // conflict as one region so Current and Incoming start at the same row.
+  // The on-disk marker blocks identify each revision's original range.
+  // Keep these anchors when decisions change the length of Result.
   function groupConflictSpans(spans, blocks) {
     const grouped = [];
     let index = 0;
@@ -288,30 +432,69 @@
       }
     }
 
-    for (const block of blocks) {
+    for (const [conflict, block] of blocks.entries()) {
       consume(block.startLine, append);
       const start = afterStart;
       consume(block.endLine + 1);
-      append({ beforeStart: block.startLine, beforeEnd: block.endLine + 1, afterStart: start, afterEnd: afterStart, equal: false });
+      append({ beforeStart: block.startLine, beforeEnd: block.endLine + 1, afterStart: start, afterEnd: afterStart, equal: false, conflict });
     }
     consume(Infinity, append);
     return grouped;
   }
 
-  function createPaneLayout(result, source, pad, blocks = []) {
+  function sourceRanges(working, source, blocks) {
+    return groupConflictSpans(alignLines(working, source), blocks)
+      .filter((span) => span.conflict !== undefined)
+      .map(({ afterStart, afterEnd }) => ({ start: afterStart, end: afterEnd }));
+  }
+
+  function alignDraft(result, source, regions, ranges) {
+    const spans = [];
+    let beforeStart = 0;
+    let afterStart = 0;
+    function appendContext(beforeEnd, afterEnd) {
+      for (const span of alignLines(result.slice(beforeStart, beforeEnd), source.slice(afterStart, afterEnd))) {
+        spans.push({
+          beforeStart: span.beforeStart + beforeStart, beforeEnd: span.beforeEnd + beforeStart,
+          afterStart: span.afterStart + afterStart, afterEnd: span.afterEnd + afterStart, equal: span.equal,
+        });
+      }
+    }
+    regions.forEach(({ startLine, endLine }, conflict) => {
+      const range = ranges[conflict];
+      appendContext(startLine, range.start);
+      spans.push({
+        beforeStart: startLine, beforeEnd: endLine, afterStart: range.start, afterEnd: range.end,
+        equal: false, conflict, minimum: range.minimum ?? 1,
+      });
+      beforeStart = endLine;
+      afterStart = range.end;
+    });
+    appendContext(result.length, source.length);
+    return spans;
+  }
+
+  function createPaneLayout(result, source, pad, regions = [], ranges = []) {
     let height = 0;
-    const alignment = alignLines(result, source);
-    const visible = pad && blocks.length ? groupConflictSpans(alignment, blocks) : alignment;
+    const conflicts = [];
+    const emptyAnchors = new Map();
+    const visible = pad && regions.length ? alignDraft(result, source, regions, ranges) : alignLines(result, source);
     const spans = visible.map((span) => {
       const start = height;
       const sourceLength = span.afterEnd - span.afterStart;
-      height += pad ? Math.max(sourceLength, span.beforeEnd - span.beforeStart) : sourceLength;
-      return { ...span, start, end: height };
+      height += pad ? Math.max(sourceLength, span.beforeEnd - span.beforeStart, span.minimum ?? 0) : sourceLength;
+      const positioned = { ...span, start, end: height };
+      if (span.conflict !== undefined) {
+        conflicts[span.conflict] = positioned;
+        if (span.beforeStart === span.beforeEnd && !emptyAnchors.has(span.beforeStart)) emptyAnchors.set(span.beforeStart, start);
+      }
+      return positioned;
     });
-    return { spans, height };
+    return { spans, height, conflicts, emptyAnchors };
   }
 
   function mapRow(layout, row, toResult) {
+    if (!toResult && layout.emptyAnchors.has(row)) return layout.emptyAnchors.get(row);
     const inputStart = toResult ? 'start' : 'beforeStart';
     const inputEnd = toResult ? 'end' : 'beforeEnd';
     const outputStart = toResult ? 'beforeStart' : 'start';
@@ -326,11 +509,17 @@
     const span = layout.spans[upperBound(layout.spans, row, 'end')];
     if (!span) return undefined;
     const source = span.afterStart + row - span.start;
-    return { source: Math.min(source, span.afterEnd), gap: source >= span.afterEnd };
+    const position = { source: Math.min(source, span.afterEnd), gap: source >= span.afterEnd };
+    if (span.conflict !== undefined) {
+      position.conflict = span.conflict;
+      position.first = row === span.start;
+    }
+    return position;
   }
 
   return {
-    scanConflicts, chooseBlock, ignoreBlockSide, conflictKey, recoverConflictBases, resolveSimpleBlock,
-    splitLines, changeColors, createPaneLayout, mapRow, paneRow,
+    scanConflicts, conflictKey, recoverConflictBases, resolveSimpleBlock, createDraft, isPending,
+    canIgnoreSide, canResolveSimple, resolveSimpleDraft, resolveBlock, editDraft, draftRegions,
+    splitLines, changeColors, sourceRanges, createPaneLayout, mapRow, paneRow,
   };
 });

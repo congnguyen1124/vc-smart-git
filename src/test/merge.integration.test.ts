@@ -7,23 +7,35 @@ import { acceptMergeSide, applyMergeResult, loadMergeSnapshot } from '../git/mer
 import { GitRepository } from '../git/repository';
 
 type Block = { start: number; end: number; startLine: number; endLine: number; ours: string; base?: string; theirs: string };
+type Side = 'ours' | 'theirs';
+type DraftBlock = { start: number; end: number; original: Block; ours: string | null; theirs: string | null; manual: boolean };
+type Draft = { text: string; blocks: DraftBlock[] };
+type Region = { startLine: number; endLine: number };
+type OffsetRange = { start: number; end: number };
 const {
-  scanConflicts, chooseBlock, ignoreBlockSide, conflictKey, resolveSimpleBlock,
-  splitLines, changeColors, createPaneLayout, mapRow, paneRow,
+  scanConflicts, conflictKey, resolveSimpleBlock, createDraft, isPending, resolveBlock, resolveSimpleDraft, editDraft,
+  draftRegions, splitLines, changeColors, sourceRanges, createPaneLayout, mapRow, paneRow,
 } = require('../../media/mergeModel.js') as {
   scanConflicts(text: string, markerSize?: number): { blocks: Block[]; malformed: boolean };
-  chooseBlock(block: Block, choice: 'ours' | 'theirs' | 'both'): string;
-  ignoreBlockSide(block: Block, ignored: 'ours' | 'theirs' | undefined, side: 'ours' | 'theirs'):
-    { ignored?: 'ours' | 'theirs'; replacement?: string } | undefined;
   conflictKey(block: Block): string;
   resolveSimpleBlock(block: Pick<Block, 'base' | 'ours' | 'theirs'>): string | undefined;
+  createDraft(text: string, markerSize: number, bases: Map<string, string>, noAncestor: boolean): Draft;
+  isPending(block: DraftBlock): boolean;
+  resolveBlock(draft: Draft, index: number, choice: 'take' | 'ignore' | 'keep' | 'base', side?: Side): Draft;
+  resolveSimpleDraft(draft: Draft): { draft: Draft; count: number };
+  editDraft(draft: Draft, text: string, selection: OffsetRange | undefined, caret: number): Draft;
+  draftRegions(draft: Draft): Region[];
   splitLines(text: string): string[];
   changeColors(base: string[] | undefined, lines: string[]):
     { kinds: Array<string | undefined>; removed: Map<number, number> };
-  createPaneLayout(result: string[], source: string[], pad: boolean, blocks?: Block[]): { height: number };
+  sourceRanges(working: string[], source: string[], blocks: Block[]): OffsetRange[];
+  createPaneLayout(result: string[], source: string[], pad: boolean, regions?: Region[], ranges?: OffsetRange[]): { height: number };
   mapRow(layout: { height: number }, row: number, toResult: boolean): number;
-  paneRow(layout: { height: number }, row: number): { source: number; gap: boolean } | undefined;
+  paneRow(layout: { height: number }, row: number): { source: number; gap: boolean; conflict?: number; first?: boolean } | undefined;
 };
+
+const blockText = (ours: string, theirs: string, base?: string): string =>
+  `<<<<<<< Current\n${ours}${base === undefined ? '' : `||||||| Base\n${base}`}=======\n${theirs}>>>>>>> Incoming\n`;
 
 test('merge blocks preserve surrounding content and reject partial markers', () => {
   const original = 'before\n<<<<<<<<< Current\nours\n||||||||| Base\nbase\n=========\ntheirs\n>>>>>>>>> Incoming\nafter\n';
@@ -32,19 +44,70 @@ test('merge blocks preserve surrounding content and reject partial markers', () 
   assert.equal(parsed.blocks.length, 1);
   const block = parsed.blocks[0]!;
   assert.equal(block.base, 'base\n');
-  assert.equal(original.slice(0, block.start) + chooseBlock(block, 'both') + original.slice(block.end),
-    'before\nours\ntheirs\nafter\n');
   assert.equal(scanConflicts(original.replace('>>>>>>>>> Incoming\n', ''), 9).malformed, true);
   assert.equal(scanConflicts('Title\n=======\n').malformed, false);
 });
 
-test('ignoring a merge side is reversible and two ignored sides require a known Base', () => {
-  const block: Block = { start: 0, end: 0, startLine: 0, endLine: 0, ours: 'current\n', theirs: 'incoming\n' };
-  assert.deepEqual(ignoreBlockSide(block, undefined, 'ours'), { ignored: 'ours' });
-  assert.deepEqual(ignoreBlockSide(block, 'ours', 'ours'), { ignored: undefined });
-  assert.equal(ignoreBlockSide(block, 'ours', 'theirs'), undefined);
-  assert.deepEqual(ignoreBlockSide({ ...block, base: 'original\n' }, 'theirs', 'ours'), { replacement: 'original\n' });
-  assert.deepEqual(ignoreBlockSide({ ...block, base: '' }, 'ours', 'theirs'), { replacement: '' });
+test('Result starts from Base and keeps each side actionable until it has a decision', () => {
+  const initial = createDraft('merged before\n' + blockText('left\n', 'right\n', 'base\n') + 'merged after\n',
+    7, new Map(), false);
+  assert.equal(initial.text, 'merged before\nbase\nmerged after\n');
+  const right = resolveBlock(initial, 0, 'take', 'theirs');
+  assert.equal(right.text, 'merged before\nright\nmerged after\n');
+  assert.equal(isPending(right.blocks[0]!), true);
+  assert.equal(right.blocks[0]?.theirs, 'accepted');
+  assert.equal(resolveBlock(right, 0, 'take', 'theirs'), right);
+  const both = resolveBlock(right, 0, 'take', 'ours');
+  assert.equal(both.text, 'merged before\nright\nleft\nmerged after\n');
+  assert.equal(isPending(both.blocks[0]!), false);
+  const ignored = resolveBlock(resolveBlock(initial, 0, 'ignore', 'ours'), 0, 'ignore', 'theirs');
+  assert.equal(isPending(ignored.blocks[0]!), false);
+  assert.equal(ignored.text, initial.text);
+  assert.equal(resolveBlock(right, 0, 'ignore', 'ours').text, right.text);
+  assert.equal(isPending(initial.blocks[0]!), true);
+});
+
+test('unknown Base stays pending after ignoring a side and add/add keeps a known empty Base', () => {
+  const text = blockText('current\n', 'incoming\n');
+  const initial = createDraft(text, 7, new Map(), false);
+  const ignored = resolveBlock(initial, 0, 'ignore', 'ours');
+  assert.equal(resolveBlock(ignored, 0, 'ignore', 'theirs'), ignored);
+  const addAdd = createDraft(text, 7, new Map(), true);
+  const resolved = resolveBlock(resolveBlock(addAdd, 0, 'ignore', 'ours'), 0, 'ignore', 'theirs');
+  assert.equal(resolved.text, '');
+  assert.equal(isPending(resolved.blocks[0]!), false);
+});
+
+test('manual edits and bulk resolution track conflict offsets without replacing accepted or edited text', () => {
+  const first = blockText('let count = 2, mode = "sync";\n', 'let count = 1, mode = "async";\n',
+    'let count = 1, mode = "sync";\n');
+  const initial = createDraft('prefix\n' + first + 'middle\n' + blockText('current\n', 'incoming\n', 'original\n'), 7, new Map(), false);
+  const { draft: combined, count } = resolveSimpleDraft(initial);
+  assert.equal(count, 1);
+  assert.match(combined.text, /count = 2, mode = "async"/);
+  assert.equal(isPending(combined.blocks[1]!), true);
+  const second = combined.blocks[1]!;
+  const text = combined.text.slice(0, second.start) + 'edited by hand\n' + combined.text.slice(second.end);
+  const edited = editDraft(combined, text, { start: second.start, end: second.end }, second.start + 'edited by hand\n'.length);
+  assert.equal(edited.blocks[1]?.manual, true);
+  const prefixed = editDraft(edited, 'comment\n' + edited.text, { start: 0, end: 0 }, 8);
+  assert.equal(prefixed.blocks[1]?.start, second.start + 8);
+  const kept = resolveBlock(prefixed, 1, 'keep');
+  assert.equal(kept.text, 'comment\n' + text);
+  assert.equal(kept.blocks.some(isPending), false);
+  const appended = resolveBlock(prefixed, 1, 'take', 'theirs');
+  assert.match(appended.text, /edited by hand\nincoming\n$/);
+  assert.equal(resolveSimpleDraft(resolveBlock(initial, 0, 'take', 'ours')).count, 0);
+});
+
+test('taking a side after editing adjacent empty conflict ranges preserves draft text', () => {
+  const initial = createDraft(blockText('first left\n', 'first right\n', '') +
+    blockText('second left\n', 'second right\n', ''), 7, new Map(), false);
+  const edited = editDraft(initial, 'manual\n', { start: 0, end: 0 }, 7);
+  const second = resolveBlock(edited, 1, 'take', 'theirs');
+  assert.equal(second.text, 'manual\nsecond right\n');
+  const first = resolveBlock(second, 0, 'take', 'ours');
+  assert.equal(first.text, 'manual\nfirst left\nsecond right\n');
 });
 
 test('simple conflict resolution combines independent edits and rejects overlapping or ambiguous edits', () => {
@@ -99,6 +162,15 @@ test('ordinary Git conflict markers recover only reproducible ancestor chunks', 
     assert.match((await repo.run(['ls-files', '-u'])).stdout, /options\.ts/);
     await writeFile(absolute, '// manually edited context\n' + snapshot.working.text);
     assert.deepEqual((await loadMergeSnapshot(repo, file)).conflictBases, []);
+    await writeFile(absolute, snapshot.working.text!);
+    const restored = await loadMergeSnapshot(repo, file);
+    const draft = createDraft(restored.working.text!, restored.markerSize, new Map(restored.conflictBases), false);
+    const accepted = resolveBlock(draft, 0, 'take', 'theirs');
+    assert.equal(isPending(accepted.blocks[0]!), true);
+    const result = resolveBlock(accepted, 0, 'ignore', 'ours');
+    await applyMergeResult(repo, restored, result.text);
+    assert.equal(await readFile(absolute, 'utf8'), content(1, 'async'));
+    assert.equal((await repo.run(['ls-files', '-u'])).stdout, '');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -136,15 +208,18 @@ test('merge pane mapping follows matching rows even after unequal hunks and for 
 test('Current and Incoming start the same conflict at the same visual row', () => {
   const working = 'header\n<<<<<<< HEAD\ncurrent\n=======\nincoming\nextra\n>>>>>>> topic\nshared\n';
   const { blocks } = scanConflicts(working);
-  const lines = splitLines(working);
-  const current = createPaneLayout(lines, ['header', 'current', 'shared'], true, blocks);
-  const incoming = createPaneLayout(lines, ['header', 'incoming', 'extra', 'shared'], true, blocks);
-  assert.deepEqual(paneRow(current, 1), { source: 1, gap: false });
-  assert.deepEqual(paneRow(incoming, 1), { source: 1, gap: false });
-  assert.deepEqual(paneRow(current, 2), { source: 2, gap: true });
-  assert.deepEqual(paneRow(incoming, 2), { source: 2, gap: false });
-  assert.deepEqual(paneRow(current, 7), { source: 2, gap: false });
-  assert.deepEqual(paneRow(incoming, 7), { source: 3, gap: false });
+  const draft = createDraft(working, 7, new Map(), true);
+  const regions = draftRegions(draft);
+  const ours = ['header', 'current', 'shared'];
+  const theirs = ['header', 'incoming', 'extra', 'shared'];
+  const current = createPaneLayout(splitLines(draft.text), ours, true, regions, sourceRanges(splitLines(working), ours, blocks));
+  const incoming = createPaneLayout(splitLines(draft.text), theirs, true, regions, sourceRanges(splitLines(working), theirs, blocks));
+  assert.deepEqual(paneRow(current, 1), { source: 1, gap: false, conflict: 0, first: true });
+  assert.deepEqual(paneRow(incoming, 1), { source: 1, gap: false, conflict: 0, first: true });
+  assert.equal(mapRow(current, 1, false), 1);
+  assert.equal(mapRow(incoming, 1, false), 1);
+  assert.equal(mapRow(current, 2, true), 1);
+  assert.equal(mapRow(incoming, 3, true), 1);
 });
 
 test('custom merge applies UTF-8 results, preserves line endings and handles deleted sides', async () => {
