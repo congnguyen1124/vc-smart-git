@@ -177,7 +177,7 @@ select, input, textarea {
 .status-letter { font-weight: 700; text-align: center; }
 .status-M { color: var(--vscode-gitDecoration-modifiedResourceForeground, #cca700); }
 .status-A, .status-\? { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
-.status-D { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
+.file-row .status-D { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); }
 .status-R { color: var(--vscode-gitDecoration-renamedResourceForeground, #73c991); }
 .status-U { color: var(--vscode-gitDecoration-conflictingResourceForeground, #e4676b); }
 .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -186,7 +186,9 @@ select, input, textarea {
 .material-file-icon.fallback { color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 17px; text-align: center; }
 .decoration-added .file-name, .commit-file-row.decoration-added .ellipsis { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
 .decoration-modified .file-name, .commit-file-row.decoration-modified .ellipsis { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
-.decoration-deleted .file-name, .commit-file-row.decoration-deleted .ellipsis { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
+.file-row.decoration-deleted .file-name { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); }
+.file-row.decoration-deleted .material-file-icon { filter: grayscale(1); opacity: .58; }
+.commit-file-row.decoration-deleted .ellipsis { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
 .decoration-renamed .file-name, .commit-file-row.decoration-renamed .ellipsis { color: var(--vscode-gitDecoration-renamedResourceForeground, #73c991); }
 .decoration-untracked .file-name, .commit-file-row.decoration-untracked .ellipsis { color: var(--vscode-gitDecoration-untrackedResourceForeground, #81b88b); }
 .decoration-conflict .file-name, .commit-file-row.decoration-conflict .ellipsis { color: var(--vscode-gitDecoration-conflictingResourceForeground, #e4676b); }

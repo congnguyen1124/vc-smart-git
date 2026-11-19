@@ -283,6 +283,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
       case 'stage': await this.stage(pathValues(value)); return;
       case 'unstage': await this.unstage(pathValues(value)); return;
       case 'discard': await this.discard(pathValues(value)); return;
+      case 'deleteFiles': await this.deleteFiles(pathValues(value)); return;
       case 'markResolved': await this.stage(pathValues(value)); return;
       case 'useOurs': await this.useConflictSide(pathValues(value), 'ours'); return;
       case 'useTheirs': await this.useConflictSide(pathValues(value), 'theirs'); return;
@@ -403,6 +404,44 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
         }
       }
     }, `${valid.length} file${valid.length === 1 ? '' : 's'} rolled back`);
+  }
+
+  private async deleteFiles(paths: readonly string[]): Promise<void> {
+    const valid = this.validPaths(paths);
+    if (valid.length === 0 || !this.activeRepository) {
+      return;
+    }
+
+    const files: Array<{ path: string; uri: vscode.Uri }> = [];
+    for (const filePath of valid) {
+      const uri = vscode.Uri.file(resolveRepositoryPath(this.activeRepository.root, filePath));
+      try {
+        await vscode.workspace.fs.stat(uri);
+        files.push({ path: filePath, uri });
+      } catch (error) {
+        if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') {
+          throw error;
+        }
+      }
+    }
+    if (files.length === 0) {
+      void vscode.window.showInformationMessage('The selected files have already been deleted.');
+      return;
+    }
+
+    const prompt = files.length === 1
+      ? `Delete “${files[0]?.path}” from disk? It will be moved to Trash.`
+      : `Delete ${files.length} selected files from disk? They will be moved to Trash.`;
+    const answer = await vscode.window.showWarningMessage(prompt, { modal: true }, 'Delete');
+    if (answer !== 'Delete') {
+      return;
+    }
+
+    await this.execute('Deleting files', async () => {
+      for (const file of files) {
+        await vscode.workspace.fs.delete(file.uri, { recursive: false, useTrash: true });
+      }
+    }, `${files.length} file${files.length === 1 ? '' : 's'} moved to Trash`);
   }
 
   private async useConflictSide(paths: readonly string[], side: 'ours' | 'theirs'): Promise<void> {

@@ -45,6 +45,7 @@ The Local Changes tab provides a focused working-tree workflow:
 
 - View tracked changes and unversioned files in separate collapsible sections.
 - Select ranges with **Shift** and add or remove individual files with **Cmd/Ctrl**, then run Stage, Unstage, or Rollback for the complete selection.
+- Press **Delete** (or **Backspace** on macOS) to confirm and move the selected files to Trash; deleted tracked files remain visible in Changes with a muted gray style.
 - Distinguish added, modified, deleted, renamed, untracked, and conflicted files using the active VS Code theme.
 - Preview concise unified diffs without raw `diff --git` metadata.
 - Open a file in the built-in VS Code Diff Editor or jump directly to its source.

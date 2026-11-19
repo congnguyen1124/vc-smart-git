@@ -160,6 +160,7 @@
       if (action === 'stage') return !change.conflicted && change.hasWorkingTreeChange;
       if (action === 'unstage') return !change.conflicted && change.hasStagedChange;
       if (action === 'discard') return !change.conflicted && (change.hasWorkingTreeChange || change.hasStagedChange);
+      if (action === 'deleteFiles') return change.kind !== 'deleted';
       return change.conflicted;
     });
     return [...new Set(matches.map(({ descriptor }) => descriptor.path))];
@@ -652,6 +653,7 @@
       const hasStaged = ordinary.some(({ change }) => change.hasStagedChange);
       const hasWorking = ordinary.some(({ change }) => change.hasWorkingTreeChange);
       const canRollback = ordinary.some(({ change }) => change.hasWorkingTreeChange || change.hasStagedChange);
+      const canDelete = selection.some(({ change }) => change.kind !== 'deleted');
       const items = [
         ...(selection.length > 1 ? [{ label: `${selection.length} files selected`, heading: true }, separator()] : []),
         { label: 'Show Diff', action: 'openDiff' },
@@ -674,6 +676,7 @@
         if (hasStaged) items.push({ label: 'Unstage', action: 'unstage' });
         if (canRollback) items.push({ label: 'Rollback…', action: 'discard', danger: true });
       }
+      if (canDelete) items.push({ label: 'Delete Files…', action: 'deleteFiles', danger: true, shortcut: 'Delete' });
       items.push(separator(), { label: 'Refresh', action: 'refresh' });
       return items;
     }
@@ -808,7 +811,7 @@
     switch (action) {
       case 'refresh': case 'fetch': case 'pull': case 'push': case 'stageAll': case 'unstageAll': case 'continueOperation': case 'abortOperation':
         post(action); break;
-      case 'stage': case 'unstage': case 'discard': case 'markResolved': case 'useOurs': case 'useTheirs': case 'openMerge': {
+      case 'stage': case 'unstage': case 'discard': case 'deleteFiles': case 'markResolved': case 'useOurs': case 'useTheirs': case 'openMerge': {
         const paths = selectedPathsForAction(action, target);
         if (paths.length) post(action, { paths });
         break;
@@ -964,6 +967,20 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeContextMenu();
+      return;
+    }
+    const focusedFile = document.activeElement?.closest?.('.file-row');
+    if (
+      activeTab === 'changes'
+      && (event.key === 'Delete' || event.key === 'Backspace')
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && focusedFile
+    ) {
+      event.preventDefault();
+      const paths = selectedPathsForAction('deleteFiles', focusedFile);
+      if (paths.length) post('deleteFiles', { paths });
       return;
     }
     const target = event.target.closest('[data-action]');
