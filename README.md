@@ -26,13 +26,13 @@ Explore local and remote branches alongside a colored multi-lane commit graph, r
 
 ### Merge Editor
 
-Compare Current and Incoming, edit Result, and resolve conflicts one block at a time in the Smart Git editor tab.
+Compare Current and Incoming in a compact three-pane editor, resolve simple conflicts in one action, and edit Result before staging.
 
 ![Smart Git merge editor showing a highlighted conflict in Current, Result, and Incoming](resources/screenshots/merge-editor.png)
 
 ### Git Blame
 
-Annotate the active editor with commit dates and authors, including a clear marker for uncommitted lines.
+Annotate the active editor with commit dates and authors. Recent commits use deeper green shading.
 
 ![VC Smart Git annotations](resources/screenshots/git-blame.jpg)
 
@@ -64,8 +64,10 @@ The Local Changes tab provides a focused working-tree workflow:
 
 Open **Local Changes → Merge Conflicts → Resolve**. Select a file or choose **Resolve Manually** to open it in the Smart Git Merge Editor.
 
-- Compare **Current** and **Incoming** alongside the editable **Result**. Switch to **Full revisions** for more context or **Show base** to see the common ancestor when available.
+- Compare **Current** and **Incoming** alongside the editable **Result**. Switch to **Full revisions** for continuous source views or **Show base** to see the common ancestor when available.
+- Scroll any pane to follow corresponding lines across the merge editor. Green marks additions, blue marks replacements, and red marks removals or ignored changes.
 - Navigate between conflict blocks and use the inline **»** or **«** to take Current or Incoming. Choose **×** to ignore a side for that block and **↶** to bring it back. When both sides are ignored, Smart Git uses Base if the conflict includes it.
+- Select **Resolve Simple Conflicts** in the merge toolbar to combine non-overlapping changes against Base and accept identical changes. Review the draft in Result and use **Undo choice** to undo the batch.
 - Use **Use Both** to combine the two sides. Diff3 conflicts also offer **Use Base**. **Undo choice** reverses the last block action.
 - Choose **Apply & Stage** once all conflict markers have been cleared. Smart Git checks for external changes to the file and index before saving. The active Git operation can be finished separately after all files are resolved.
 - Accept an entire revision or a deletion when that is the intended result. Files that cannot be edited as UTF-8 text use these whole-file actions.
@@ -97,6 +99,7 @@ The Log tab combines branch navigation, commit history, and commit details:
 Run **VC Smart Git: Annotate with Git Blame** from the Command Palette or editor context menu.
 
 - Display author, revision, date, and commit summary beside each editor line.
+- The annotation background gets greener and stronger for newer commits in the file.
 - Click a committed blame annotation to reveal that commit in the Smart Git Log.
 - Right-click an annotated line to show its diff, copy the revision, open the revision or its parent, or view it in the remote repository browser.
 - Uncommitted lines are identified separately.

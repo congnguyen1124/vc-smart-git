@@ -21,7 +21,6 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <body>
   <header class="masthead">
     <div class="title-group">
-      <span class="eyebrow">SMART GIT / MERGE</span>
       <h1 id="fileName">Merge conflict</h1>
       <div id="fileLocation" class="muted"></div>
     </div>
@@ -32,7 +31,18 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <button id="previous" type="button" aria-label="Previous conflict" title="Previous conflict">↑</button>
       <button id="next" type="button" aria-label="Next conflict" title="Next conflict">↓</button>
       <span id="position" class="muted"></span>
+      <button id="resolveSimple" type="button" disabled>
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+          <path d="M2 12.8l8-8 2 2-8 8zM8 7l2 2M4 1.5v4m-2-2h4m7-2v4m-2-2h4m-2 7v4m-2-2h4" />
+        </svg>
+        Resolve Simple Conflicts
+      </button>
     </div>
+    <ul class="diff-legend" aria-label="Change colors">
+      <li class="diff-added">Added</li>
+      <li class="diff-removed">Removed</li>
+      <li class="diff-modified">Replaced</li>
+    </ul>
     <div class="view-tools">
       <button id="toggleRevision" type="button" aria-pressed="false">Full revisions</button>
       <button id="toggleBase" type="button" aria-pressed="false">Show base</button>
@@ -52,6 +62,7 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <header class="pane-heading"><span class="pane-dot"></span><div><strong>Result</strong><span id="resultMeta" class="muted">Editable working copy</span></div></header>
       <div id="editorBody" class="editor-body">
         <div id="gutter" class="gutter" aria-hidden="true"></div>
+        <div id="resultHighlights" class="result-highlights" aria-hidden="true"></div>
         <textarea id="result" aria-label="Editable merge result" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
       </div>
       <p id="resultNote" class="muted empty hidden"></p>
@@ -71,7 +82,7 @@ function mergeHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     </section>
   </main>
   <footer class="page-footer">
-    <div id="footerHelp" class="muted">Loading revisions from Git…</div>
+    <div id="footerHelp" class="muted" role="status">Loading revisions from Git…</div>
     <div class="footer-actions">
       <button id="close" type="button">Close</button>
       <button id="apply" class="primary" type="button" disabled>Apply &amp; Stage</button>
@@ -130,6 +141,7 @@ export class MergePanelManager implements vscode.Disposable {
             markerSize: snapshot.markerSize,
             working: { text: snapshot.working.text, note: snapshot.working.note },
             base: snapshot.base, ours: snapshot.ours, theirs: snapshot.theirs,
+            conflictBases: snapshot.conflictBases,
           });
         } else if (type === 'close') {
           if (dirty === true) {

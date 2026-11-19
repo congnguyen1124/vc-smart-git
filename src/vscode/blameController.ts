@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { GitBlameLine } from '../git/blame';
 import { GitRepository } from '../git/repository';
+import { blameBackgrounds } from './blameColors';
 import { GitContentProvider } from './diffProvider';
 
 interface BlameDocumentState {
@@ -431,6 +432,8 @@ export class GitBlameController implements vscode.Disposable {
       filePath: relativePath,
       lines: new Map(lines.map((line) => [line.finalLine, line])),
     });
+    const backgrounds = blameBackgrounds(lines);
+    const neutralBackground = new vscode.ThemeColor('editor.lineHighlightBackground');
     const decorations = lines
       .filter((line) => line.finalLine > 0 && line.finalLine <= document.lineCount)
       .map((line): vscode.DecorationOptions => ({
@@ -443,10 +446,10 @@ export class GitBlameController implements vscode.Disposable {
         renderOptions: {
           before: {
             contentText: annotationText(line),
-            backgroundColor: new vscode.ThemeColor('editor.lineHighlightBackground'),
+            backgroundColor: (line.uncommitted ? undefined : backgrounds.get(line.authorTime)) ?? neutralBackground,
             color: line.uncommitted
               ? new vscode.ThemeColor('gitDecoration.modifiedResourceForeground')
-              : new vscode.ThemeColor('editorCodeLens.foreground'),
+              : new vscode.ThemeColor('editor.foreground'),
           },
         },
       }));

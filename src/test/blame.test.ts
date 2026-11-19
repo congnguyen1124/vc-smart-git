@@ -2,6 +2,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseBlamePorcelain } from '../git/blame';
+import { blameBackgrounds } from '../vscode/blameColors';
+
+test('blame background favors green for recent committed dates and excludes local changes', () => {
+  const colors = blameBackgrounds([
+    { authorTime: 100, uncommitted: false },
+    { authorTime: 200, uncommitted: false },
+    { authorTime: 300, uncommitted: false },
+    { authorTime: 300, uncommitted: false },
+    { authorTime: 900, uncommitted: true },
+    { authorTime: 0, uncommitted: false },
+  ]);
+  assert.deepEqual([...colors], [
+    [100, 'rgba(160, 94, 91, 0.18)'],
+    [200, 'rgba(101, 117, 132, 0.22)'],
+    [300, 'rgba(35, 153, 89, 0.38)'],
+  ]);
+  assert.equal(blameBackgrounds([{ authorTime: 100, uncommitted: false }]).get(100), colors.get(200));
+});
 
 test('parseBlamePorcelain reads committed and working-tree lines', () => {
   const output = [

@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, lstat, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, open, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { GitRepository } from './repository';
 
 const MAX_TEXT_BYTES = 750_000;
-const { scanConflicts } = require('../../media/mergeModel.js') as {
-  scanConflicts(text: string, markerSize: number): { blocks: unknown[]; malformed: boolean };
+type ConflictBases = Array<[key: string, base: string]>;
+const { scanConflicts, recoverConflictBases } = require('../../media/mergeModel.js') as {
+  scanConflicts(text: string, markerSize: number): { blocks: Array<{ base?: string }>; malformed: boolean };
+  recoverConflictBases(working: string, reproduced: string, markerSize: number): ConflictBases;
 };
 
 type MergeStage = { mode: string; oid: string };
@@ -35,6 +38,7 @@ export interface MergeSnapshot {
   base: MergeVersion;
   ours: MergeVersion;
   theirs: MergeVersion;
+  conflictBases: ConflictBases;
 }
 
 function isMissing(error: unknown): boolean {
@@ -127,6 +131,36 @@ async function readVersion(repo: GitRepository, stage?: MergeStage): Promise<Mer
     : { present: true, text: text.replace(/^\ufeff/, '').replace(/\r\n/g, '\n') };
 }
 
+async function recoverWorkingBases(
+  repo: GitRepository,
+  working: string,
+  markerSize: number,
+  ours: MergeVersion,
+  base: MergeVersion,
+  theirs: MergeVersion,
+): Promise<ConflictBases> {
+  if (ours.text === undefined || base.text === undefined || theirs.text === undefined) return [];
+  const scan = scanConflicts(working, markerSize);
+  if (scan.malformed || !scan.blocks.some((block) => block.base === undefined)) return [];
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'vc-smart-git-diff3-'));
+  try {
+    const files = ['current', 'base', 'incoming'].map((name) => path.join(directory, name));
+    await Promise.all([ours.text, base.text, theirs.text].map((text, index) => writeFile(files[index]!, text)));
+    for (const style of ['--zdiff3', '--diff3']) {
+      const { stdout } = await repo.run(
+        ['merge-file', '--stdout', style, `--marker-size=${markerSize}`, ...files], { allowFailure: true },
+      );
+      // Use Git's ancestor chunks only when they reproduce the same markers
+      // and surrounding content as the user's working copy.
+      const recovered = recoverConflictBases(working, stdout, markerSize);
+      if (recovered.length) return recovered;
+    }
+    return [];
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 export async function loadMergeSnapshot(repo: GitRepository, filePath: string): Promise<MergeSnapshot> {
   const absolute = await workingPath(repo.root, filePath);
   const index = await unmergedIndex(repo, filePath);
@@ -145,7 +179,9 @@ export async function loadMergeSnapshot(repo: GitRepository, filePath: string): 
     delete working.text;
     working.note = 'This conflict involves a file type change. Accept an entire side to keep its Git file type.';
   }
-  return { filePath, index, markerSize, working, base, ours, theirs };
+  const conflictBases = working.text === undefined ? []
+    : await recoverWorkingBases(repo, working.text, markerSize, ours, base, theirs).catch(() => []);
+  return { filePath, index, markerSize, working, base, ours, theirs, conflictBases };
 }
 
 async function verifySnapshot(repo: GitRepository, snapshot: MergeSnapshot): Promise<string> {

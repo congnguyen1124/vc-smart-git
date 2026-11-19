@@ -2,7 +2,7 @@
   "name": "vc-smart-git",
   "displayName": "VC Smart Git",
   "description": "A JetBrains-inspired Git tool window for Visual Studio Code.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "icon": "resources/app-logo.png",
   "publisher": "congnguyencn",
   "license": "MIT",

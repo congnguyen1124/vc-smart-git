@@ -2,7 +2,10 @@
   'use strict';
 
   const vscode = acquireVsCodeApi();
-  const { scanConflicts, chooseBlock, ignoreBlockSide } = globalThis.SmartGitMerge;
+  const {
+    scanConflicts, chooseBlock, ignoreBlockSide, conflictKey, resolveSimpleBlock,
+    splitLines, changeColors, createPaneLayout, mapRow, paneRow,
+  } = globalThis.SmartGitMerge;
   const byId = (id) => document.getElementById(id);
   const editor = byId('result');
   const show = (id, visible) => byId(id).classList.toggle('hidden', !visible);
@@ -19,10 +22,25 @@
   let showRevision = false;
   let showBase = false;
   let busy = false;
-  let lineCount = 0;
   let ignoredSides = [];
+  let conflictBases;
+  let simpleResolutions = [];
+  let resolvedNotice = '';
+  let revisions;
+  let comparedText;
+  let resultLines;
+  let resultColors;
+  let rowHeight = 21;
   const undo = [];
-  const codeCache = new Map();
+  const sides = ['ours', 'theirs'].map((side) => ({
+    side,
+    scroll: byId(`${side}Code`),
+    sheet: element('div', 'code-sheet'),
+    rows: element('div', 'code-rows'),
+  }));
+  const paneFor = new Map(sides.map((pane) => [pane.scroll, pane]));
+  const scrollPositions = new Map();
+  const changeLabels = { added: 'Added', removed: 'Removed', modified: 'Replaced' };
 
   function appendCode(line, text) {
     if (text.length > 2000) {
@@ -42,39 +60,117 @@
     line.append(document.createTextNode(text.slice(cursor)));
   }
 
-  function renderCode(id, version, context) {
-    const target = byId(id);
-    const contextKey = context && JSON.stringify(context);
-    const cached = codeCache.get(id);
-    if (cached?.version === version && cached.contextKey === contextKey) return;
-    codeCache.set(id, { version, contextKey });
-    const scroll = context ? 0 : target.scrollTop;
-    target.classList.toggle('has-merge-rail', Boolean(context?.actions));
-    target.replaceChildren();
-    if (!context && version.text === undefined) {
-      target.append(element('p', 'empty muted', version.note || 'This version has no file at this path.'));
-      return;
+  function loadRevisions() {
+    const base = file.base.text !== undefined || !file.base.present ? splitLines(file.base.text) : undefined;
+    return Object.fromEntries(['ours', 'theirs', 'base'].map((key) => {
+      const version = file[key];
+      const lines = splitLines(version.text);
+      const columns = lines.reduce((width, line) => Math.max(width, line.replaceAll('\t', '    ').length), 0);
+      const colors = version.text !== undefined || !version.present ? changeColors(base, lines) : changeColors();
+      return [key, { ...version, lines, columns, colors }];
+    }));
+  }
+
+  function updateLayouts() {
+    const edited = comparedText !== editor.value;
+    if (edited) {
+      comparedText = editor.value;
+      resultLines = editor.value.split('\n');
+      const base = revisions.base.text !== undefined || !revisions.base.present ? revisions.base.lines : undefined;
+      resultColors = changeColors(base, splitLines(editor.value));
     }
-    const source = context?.lines ?? version.text.split('\n');
+    rowHeight = parseFloat(getComputedStyle(editor).lineHeight) || 21;
+    for (const pane of sides) {
+      const revision = revisions[pane.side === 'ours' && showBase ? 'base' : pane.side];
+      const pad = !showRevision && file.working.text !== undefined && (revision.text !== undefined || !revision.present);
+      if (edited || pane.revision !== revision || pane.pad !== pad) {
+        pane.revision = revision;
+        pane.pad = pad;
+        pane.layout = createPaneLayout(resultLines, revision.lines, pad, scan.blocks);
+        pane.sheet.style.height = `${pane.layout.height * rowHeight}px`;
+        pane.sheet.style.setProperty('--columns', String(revision.columns));
+        pane.note.textContent = revision.text === undefined
+          ? revision.note || 'This revision has no file at this path.'
+          : revision.lines.length ? '' : 'This revision is an empty file.';
+        pane.scroll.classList.toggle('has-merge-rail', !showRevision && !(pane.side === 'ours' && showBase));
+      }
+      // When a side deletes its entire file there is still a gap to scroll through.
+      pane.note.hidden = !pane.note.textContent;
+    }
+  }
+
+  function blockAt(row) {
+    let low = 0;
+    let high = scan.blocks.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (scan.blocks[mid].endLine < row) low = mid + 1;
+      else high = mid;
+    }
+    return scan.blocks[low]?.startLine <= row ? low : -1;
+  }
+
+  function applyChangeStyle(node, kind) {
+    if (!kind) return;
+    node.classList.add(`diff-${kind}`);
+    node.title = changeLabels[kind];
+  }
+
+  function renderCode(pane, force) {
+    const { scroll, layout, rows, revision, side } = pane;
+    if (!layout) return;
+    const first = Math.max(0, Math.floor(scroll.scrollTop / rowHeight) - 3);
+    const last = Math.min(layout.height + 1, first + Math.ceil(scroll.clientHeight / rowHeight) + 8);
+    if (!force && pane.first === first && pane.last === last) return;
+    pane.first = first;
+    pane.last = last;
+    const hasRail = scroll.classList.contains('has-merge-rail');
+    const block = scan.blocks[activeIndex];
+    const ignored = ignoredSides[activeIndex];
+    const actionRow = block && hasRail
+      ? Math.min(layout.height - 1, Math.floor(mapRow(layout, block.startLine, false))) : -1;
     const fragment = document.createDocumentFragment();
-    source.slice(0, 1500).forEach((text, index) => {
-      const changed = context && index >= context.start && index < context.end;
-      const line = element('div', `code-line${changed ? ' changed' : ''}`);
-      if (changed && context.actions?.ignored) line.classList.add('ignored');
-      line.append(element('span', 'line-number', String((context?.first ?? 1) + index)));
+    for (let row = first; row < last; row += 1) {
+      const position = paneRow(layout, row);
+      const source = position?.source ?? revision.lines.length;
+      const resultLine = Math.floor(mapRow(layout, row, true));
+      const blockIndex = blockAt(resultLine);
+      const isIgnored = hasRail && blockIndex >= 0 && ignoredSides[blockIndex] === side;
+      const gap = position?.gap;
+      const removed = revision.colors.removed.has(source) && paneRow(layout, row - 1)?.source !== source;
+      if (!position && !removed) continue;
+      const line = element('div', `code-line${gap ? ' diff-gap' : ''}${isIgnored ? ' ignored' : ''}`);
+      applyChangeStyle(line, isIgnored || (gap && revision.colors.removed.has(source))
+        ? 'removed' : !gap && revision.colors.kinds[source]);
+      if (removed) {
+        const count = revision.colors.removed.get(source);
+        line.classList.add('deletion-boundary');
+        line.title = `${count} ${count === 1 ? 'line' : 'lines'} removed`;
+      }
+      if (isIgnored) line.title = 'Ignored for this conflict';
+      line.append(element('span', 'line-number', position && !gap ? String(source + 1) : ''));
       const contents = element('span', 'code-text');
-      appendCode(contents, text);
+      if (position && !gap) appendCode(contents, revision.lines[source]);
       line.append(contents);
-      if (context?.actions) {
+      if (hasRail) {
         const rail = element('span', 'merge-rail');
-        if (index === context.start) appendBlockActions(rail, context.actions);
+        if (row === actionRow) appendBlockActions(rail, {
+          side, ignored: ignored === side,
+          canIgnore: Boolean(ignoreBlockSide(block, ignored, side)),
+          usesBase: Boolean(ignored && ignored !== side && block.base !== undefined),
+          busy,
+        });
         line.append(rail);
       }
       fragment.append(line);
-    });
-    if (source.length > 1500) fragment.append(element('p', 'empty muted', 'Preview shows the first 1,500 lines.'));
-    target.append(fragment);
-    target.scrollTop = scroll;
+    }
+    rows.style.top = `${first * rowHeight}px`;
+    const focused = rows.contains(document.activeElement) ? document.activeElement.dataset.mergeAction : undefined;
+    rows.replaceChildren(fragment);
+    if (focused) {
+      const control = rows.querySelector(`[data-merge-action="${focused}"]:enabled`);
+      (control || scroll).focus({ preventScroll: true });
+    }
   }
 
   function appendBlockActions(rail, { side, ignored, canIgnore, usesBase, busy }) {
@@ -98,56 +194,85 @@
     rail.append(...(left ? [ignore, apply] : [apply, ignore]));
   }
 
-  function blockContext(block, side) {
-    if (!block || showRevision || (side === 'base' && block.base === undefined)) return undefined;
-    const lines = editor.value.split('\n');
-    const first = Math.max(0, block.startLine - 5);
-    const prefix = lines.slice(first, block.startLine);
-    const value = block[side];
-    const changed = value ? value.replace(/\n$/, '').split('\n') : [''];
-    const suffix = lines.slice(block.endLine + 1, block.endLine + 8);
-    const ignored = ignoredSides[activeIndex];
-    const actions = side === 'base' ? undefined : {
-      side,
-      ignored: ignored === side,
-      canIgnore: Boolean(ignoreBlockSide(block, ignored, side)),
-      usesBase: Boolean(ignored && ignored !== side && block.base !== undefined),
-      busy,
-    };
-    return { lines: [...prefix, ...changed, ...suffix], first: first + 1, start: prefix.length, end: prefix.length + changed.length, actions };
-  }
-
   function renderGutter() {
     if (file?.working.text === undefined) return;
-    const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 21;
-    const first = Math.max(0, Math.floor(editor.scrollTop / lineHeight));
-    const last = Math.min(lineCount, first + Math.ceil(editor.clientHeight / lineHeight) + 1);
+    const first = Math.max(0, Math.floor(editor.scrollTop / rowHeight));
+    const last = Math.min(resultLines.length, first + Math.ceil(editor.clientHeight / rowHeight) + 1);
+    const offset = first * rowHeight - editor.scrollTop;
     const gutter = byId('gutter');
-    gutter.style.setProperty('--offset', `${first * lineHeight - editor.scrollTop}px`);
-    const children = [];
+    const highlights = byId('resultHighlights');
+    gutter.style.setProperty('--offset', `${offset}px`);
+    highlights.style.setProperty('--offset', `${offset}px`);
+    const numbers = [];
+    const backgrounds = [];
     for (let line = first; line < last; line += 1) {
-      const block = scan.blocks.findIndex((entry) => line >= entry.startLine && line <= entry.endLine);
-      children.push(element('div', block === activeIndex ? 'active-marker' : block >= 0 ? 'marker' : '', String(line + 1)));
+      const block = blockAt(line);
+      const number = element('div', block === activeIndex ? 'active-marker' : block >= 0 ? 'marker' : '', String(line + 1));
+      const background = element('div', '');
+      const kind = block < 0 ? resultColors.kinds[line] : undefined;
+      applyChangeStyle(number, kind);
+      applyChangeStyle(background, kind);
+      if (block >= 0) background.classList.add('diff-conflict');
+      if (block < 0 && resultColors.removed.has(line)) {
+        number.classList.add('deletion-boundary');
+        background.classList.add('deletion-boundary');
+      }
+      numbers.push(number);
+      backgrounds.push(background);
     }
-    gutter.replaceChildren(...children);
+    gutter.replaceChildren(...numbers);
+    highlights.replaceChildren(...backgrounds);
+  }
+
+  function syncScroll(source = editor, force = false) {
+    if (file.working.text !== undefined) {
+      const pane = paneFor.get(source);
+      const row = source.scrollTop / rowHeight;
+      const resultRow = pane ? mapRow(pane.layout, row, true) : row;
+      for (const target of [editor, ...sides.map(({ scroll }) => scroll)]) {
+        if (target === source) continue;
+        const other = paneFor.get(target);
+        const targetRow = other ? mapRow(other.layout, resultRow, false) : resultRow;
+        target.scrollTop = targetRow * rowHeight;
+        scrollPositions.set(target, target.scrollTop);
+      }
+      renderGutter();
+    }
+    for (const side of sides) renderCode(side, force);
+  }
+
+  function onScroll(event) {
+    if (!file) return;
+    const source = event.currentTarget;
+    if (scrollPositions.get(source) === source.scrollTop) return;
+    scrollPositions.set(source, source.scrollTop);
+    syncScroll(source);
   }
 
   function goToBlock() {
     const block = scan.blocks[activeIndex];
     if (!block) return;
-    const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 21;
-    editor.scrollTop = Math.max(0, (block.startLine - 5) * lineHeight);
-    renderGutter();
+    editor.scrollTop = Math.max(0, (block.startLine - 5) * rowHeight);
+    scrollPositions.set(editor, editor.scrollTop);
+    syncScroll();
   }
 
   function render() {
     if (!file) return;
-    scan = scanConflicts(editor.value, file.markerSize);
-    lineCount = scan.lineCount;
+    if (comparedText !== editor.value) {
+      scan = scanConflicts(editor.value, file.markerSize);
+      simpleResolutions = scan.malformed ? [] : scan.blocks.map((block) => {
+        const replacement = resolveSimpleBlock({ ...block, base: block.base ?? conflictBases.get(conflictKey(block)) });
+        if (replacement === undefined) return undefined;
+        const remaining = scanConflicts(replacement, file.markerSize);
+        return remaining.malformed || remaining.blocks.length ? undefined : replacement;
+      });
+    }
     const count = scan.blocks.length;
     activeIndex = Math.max(0, Math.min(activeIndex, count - 1));
     const block = scan.blocks[activeIndex];
     const ignored = ignoredSides[activeIndex];
+    const simpleCount = simpleResolutions.filter((replacement, index) => replacement !== undefined && !ignoredSides[index]).length;
     const editable = file.working.text !== undefined;
     editor.readOnly = busy || !editable;
     const ready = editable && !count && !scan.malformed;
@@ -162,29 +287,32 @@
     setText('oursMeta', showBase ? 'Common ancestor' : oursLabel);
     setText('theirsMeta', theirsLabel);
     setText('resultMeta', editable && editor.value !== file.working.text ? 'Edited in this tab' : 'Editable working copy');
-    setText('footerHelp', file.working.note || (scan.malformed ? 'Remove or repair the incomplete conflict markers in Result.'
+    setText('footerHelp', file.working.note || resolvedNotice || (scan.malformed ? 'Remove or repair the incomplete conflict markers in Result.'
       : ignored ? `${ignored === 'ours' ? 'Current' : 'Incoming'} ignored for this block. Choose a resolution or edit Result.`
         : count ? 'Use the arrows to take a side, or × to ignore it for this block.'
         : 'Apply & Stage saves the result and marks this file as resolved.'));
     const disabled = {
-      previous: count < 2, next: count < 2, toggleRevision: !count, toggleBase: !file.base.present,
+      previous: count < 2, next: count < 2, toggleRevision: !editable, toggleBase: !file.base.present,
+      resolveSimple: !editable || !simpleCount,
       useOurs: !block || ignored === 'ours', useTheirs: !block || ignored === 'theirs',
       useBoth: !block || Boolean(ignored), useBase: block?.base === undefined,
       undoChoice: undo.at(-1)?.after !== editor.value, apply: !ready,
       acceptOurs: false, acceptTheirs: false,
     };
     for (const [id, unavailable] of Object.entries(disabled)) byId(id).disabled = busy || unavailable;
+    byId('resolveSimple').title = simpleCount
+      ? `Resolve ${simpleCount} simple conflict${simpleCount === 1 ? '' : 's'} in Result`
+      : 'No simple conflicts available in this file';
     byId('close').disabled = busy;
     byId('toggleRevision').setAttribute('aria-pressed', String(showRevision));
     byId('toggleBase').setAttribute('aria-pressed', String(showBase));
-    setText('toggleRevision', showRevision ? 'Conflict context' : 'Full revisions');
+    setText('toggleRevision', showRevision ? 'Align changes' : 'Full revisions');
     setText('toggleBase', showBase ? 'Show current' : 'Show base');
     setText('acceptOurs', file.ours.present ? 'Entire Current…' : 'Accept Deletion…');
     setText('acceptTheirs', file.theirs.present ? 'Entire Incoming…' : 'Accept Deletion…');
     show('useBase', block?.base !== undefined);
-    renderCode('oursCode', showBase ? file.base : file.ours, blockContext(block, showBase ? 'base' : 'ours'));
-    renderCode('theirsCode', file.theirs, blockContext(block, 'theirs'));
-    renderGutter();
+    updateLayouts();
+    syncScroll(editor, true);
   }
 
   function choose(choice) {
@@ -198,8 +326,10 @@
   function changeBlock(update) {
     const before = editor.value;
     const ignored = [...ignoredSides];
+    const index = activeIndex;
+    resolvedNotice = '';
     update();
-    undo.push({ before, after: editor.value, index: activeIndex, ignored });
+    undo.push({ before, after: editor.value, index, ignored });
     if (undo.length > 10) undo.shift();
     render();
   }
@@ -210,6 +340,37 @@
       ignoredSides.splice(activeIndex, 1);
     });
     goToBlock();
+  }
+
+  function resolveSimple() {
+    if (byId('resolveSimple').disabled) return;
+    changeBlock(() => {
+      const workingText = editor.value;
+      const parts = [];
+      const remainingIgnored = [];
+      let start = 0;
+      let resolved = 0;
+      let first = activeIndex;
+      for (const [index, block] of scan.blocks.entries()) {
+        const replacement = simpleResolutions[index];
+        if (replacement === undefined || ignoredSides[index]) {
+          remainingIgnored.push(ignoredSides[index]);
+          continue;
+        }
+        parts.push(workingText.slice(start, block.start), replacement);
+        start = block.end;
+        resolved += 1;
+        if (index < activeIndex) first -= 1;
+      }
+      parts.push(workingText.slice(start));
+      editor.setRangeText(parts.join(''), 0, workingText.length, 'preserve');
+      activeIndex = first;
+      ignoredSides = remainingIgnored;
+      resolvedNotice = `Resolved ${resolved} simple conflict${resolved === 1 ? '' : 's'} in Result.`;
+    });
+    goToBlock();
+    const next = !byId('apply').disabled ? byId('apply') : byId('undoChoice');
+    next.focus({ preventScroll: true });
   }
 
   function inlineAction(event) {
@@ -247,6 +408,7 @@
 
   byId('previous').onclick = () => move(-1);
   byId('next').onclick = () => move(1);
+  byId('resolveSimple').onclick = resolveSimple;
   byId('useOurs').onclick = () => choose('ours');
   byId('useTheirs').onclick = () => choose('theirs');
   byId('useBoth').onclick = () => choose('both');
@@ -260,6 +422,7 @@
     if (choice?.after !== editor.value) return;
     undo.pop();
     editor.value = choice.before;
+    resolvedNotice = '';
     ignoredSides = choice.ignored;
     activeIndex = choice.index;
     render();
@@ -267,20 +430,34 @@
   };
   byId('toggleRevision').onclick = () => { showRevision = !showRevision; render(); };
   byId('toggleBase').onclick = () => { showBase = !showBase; render(); };
-  byId('oursCode').addEventListener('click', inlineAction);
-  byId('theirsCode').addEventListener('click', inlineAction);
+  const resize = new ResizeObserver(() => {
+    if (file) syncScroll(editor, true);
+  });
+  for (const pane of sides) {
+    pane.note = element('p', 'revision-note muted');
+    pane.sheet.append(pane.rows);
+    pane.scroll.append(pane.sheet, pane.note);
+    pane.scroll.addEventListener('click', inlineAction);
+    pane.scroll.addEventListener('scroll', onScroll, { passive: true });
+    resize.observe(pane.scroll);
+  }
   editor.addEventListener('input', () => {
     ignoredSides = [];
+    resolvedNotice = '';
     undo.length = 0;
     render();
   });
-  editor.addEventListener('scroll', renderGutter, { passive: true });
-  new ResizeObserver(renderGutter).observe(editor);
+  editor.addEventListener('scroll', onScroll, { passive: true });
+  resize.observe(editor);
   window.addEventListener('message', ({ data }) => {
     if (data.type === 'file') {
       file = data;
+      revisions = loadRevisions();
+      conflictBases = new Map(file.conflictBases ?? []);
+      comparedText = undefined;
       setText('fileName', file.path.split('/').pop());
       setText('fileLocation', `${file.repository} / ${file.path}`);
+      byId('fileLocation').title = byId('fileLocation').textContent;
       editor.value = file.working.text ?? '';
       editor.readOnly = file.working.text === undefined;
       setText('resultNote', file.working.note || '');
