@@ -5,6 +5,46 @@ import path from 'node:path';
 import test from 'node:test';
 import { GitRepository } from '../git/repository';
 
+test('Log filters use Git reachability and match authors before limiting results', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vc-smart-git-log-'));
+  const repository = new GitRepository(root);
+  try {
+    await repository.run(['init', '-b', 'main']);
+    await repository.run(['config', 'user.name', 'Sam (Dev)']);
+    await repository.run(['config', 'user.email', 'sam+main@example.test']);
+    assert.deepEqual(await repository.log(200), []);
+    assert.deepEqual(await repository.logAuthors(), []);
+    await repository.run(['commit', '--allow-empty', '-m', 'Base']);
+    await repository.createBranch('feature/search');
+    await repository.run(['commit', '--allow-empty', '--author=Sam (Dev) <sam+remote@example.test>', '-m', 'Remote tip']);
+    const { stdout: head } = await repository.run(['rev-parse', 'HEAD']);
+    await repository.run(['update-ref', 'refs/remotes/origin/feature/search', head.trim()]);
+    await repository.createTag('preview/v1', head.trim());
+    await repository.switchBranch('main');
+    await repository.run(['branch', '-D', 'feature/search']);
+    await repository.run(['commit', '--allow-empty', '-m', 'Main tip']);
+    await writeFile(path.join(root, '.mailmap'), 'Sam (Dev) <sam+mapped@example.test> <sam+remote@example.test>\n');
+
+    const all = await repository.log(10);
+    assert.deepEqual(new Set(all.map((commit) => commit.subject)), new Set(['Base', 'Remote tip', 'Main tip']));
+    assert.deepEqual((await repository.log(10, { ref: 'HEAD' })).map((commit) => commit.subject), ['Main tip', 'Base']);
+    assert.deepEqual((await repository.log(10, { ref: 'refs/remotes/origin/feature/search' })).map((commit) => commit.subject), ['Remote tip', 'Base']);
+    assert.deepEqual((await repository.log(1, { ref: 'refs/tags/preview/v1' })).map((commit) => commit.subject), ['Remote tip']);
+    assert.deepEqual(await repository.tags(), [{ ref: 'refs/tags/preview/v1', name: 'preview/v1' }]);
+
+    const authors = await repository.logAuthors();
+    assert.deepEqual(new Set(authors.map((author) => author.email)), new Set(['sam+main@example.test', 'sam+mapped@example.test']));
+    const mainAuthor = authors.find((author) => author.email === 'sam+main@example.test');
+    const remoteAuthor = authors.find((author) => author.email === 'sam+mapped@example.test');
+    assert.ok(mainAuthor && remoteAuthor);
+    assert.deepEqual((await repository.log(1, { ref: 'refs/remotes/origin/feature/search', author: mainAuthor })).map((commit) => commit.subject), ['Base']);
+    assert.deepEqual((await repository.log(1, { author: remoteAuthor })).map((commit) => commit.subject), ['Remote tip']);
+    assert.deepEqual(await repository.log(10, { ref: 'HEAD', author: remoteAuthor }), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('GitRepository completes local change, history, and conflict workflows', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vc-smart-git-test-'));
   const repository = new GitRepository(root);

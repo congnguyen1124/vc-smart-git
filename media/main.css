@@ -310,12 +310,10 @@ select, input, textarea {
 .conflict-row.selected { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
 .conflict-file { display: flex; align-items: center; min-width: 0; gap: 7px; padding: 4px 12px 4px 28px; }
 .conflict-file-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conflict-progress { flex: none; padding: 1px 7px; border-radius: 9px; color: var(--vscode-descriptionForeground); background: var(--vscode-badge-background); font-size: 11px; }
 .conflict-side { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; padding: 4px 12px; border-left: 1px solid var(--vscode-panel-border); }
 .conflict-side-status { overflow: hidden; flex: 1; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .conflict-side button { min-width: 72px; }
-.conflict-row.selected .file-dir, .conflict-row.selected .conflict-progress { color: inherit; opacity: .82; }
-.conflict-row.selected .conflict-progress { background: color-mix(in srgb, var(--vscode-list-activeSelectionForeground) 18%, transparent); }
+.conflict-row.selected .file-dir { color: inherit; opacity: .82; }
 .conflict-empty { display: flex; align-items: center; justify-content: center; min-height: 150px; padding: 24px; flex-direction: column; gap: 5px; color: var(--vscode-descriptionForeground); text-align: center; }
 .conflict-complete-icon { color: var(--vscode-testing-iconPassed); font-size: 30px; }
 .conflict-footer { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px 24px; border-top: 1px solid var(--vscode-panel-border); background: var(--vscode-panel-background, var(--vscode-sideBar-background)); }
@@ -350,34 +348,33 @@ select, input, textarea {
 }
 .pane-resizer:focus-visible { outline: none; }
 body.resizing-panes { cursor: col-resize; user-select: none; }
-.branches-pane .filter { min-width: 80px; flex: 1; }
-.branch-tree { height: calc(100% - 34px); overflow: auto; padding: 5px 3px 20px; }
-.branch-section-title { padding: 6px 9px 3px; font-weight: 600; }
-.branch-section-title::before {
-  display: inline-block;
-  width: 11px;
-  height: 11px;
-  margin-right: 6px;
-  content: '';
-  vertical-align: -1px;
-  background-color: var(--vscode-descriptionForeground);
-  -webkit-mask: url('../resources/arrow_down.svg') no-repeat center / 9px 9px;
-  mask: url('../resources/arrow_down.svg') no-repeat center / 9px 9px;
-}
+.branches-pane, .history-pane { display: flex; flex-direction: column; }
+.branches-pane .filter { min-width: 0; flex: 1; }
+.branch-tree { flex: 1; min-height: 0; overflow: auto; padding: 5px 5px 16px; }
 .branch-row {
   display: flex;
   align-items: center;
   gap: 7px;
-  min-height: 25px;
-  margin: 0 4px;
+  width: 100%;
+  min-height: 24px;
   padding: 2px 8px 2px var(--branch-indent, 20px);
   border-radius: 3px;
-  cursor: pointer;
+  text-align: left;
 }
-.branch-row:hover { background: var(--vscode-list-hoverBackground); }
-.branch-row.current { color: var(--vscode-textLink-foreground); font-weight: 600; background: color-mix(in srgb, var(--vscode-textLink-foreground) 8%, transparent); }
-.branch-row.worktree { color: var(--vscode-charts-green, var(--vscode-gitDecoration-addedResourceForeground)); }
-.branch-icon { color: var(--vscode-gitDecoration-addedResourceForeground); }
+.branch-row:hover, .branch-row:focus-visible {
+  background: color-mix(in srgb, var(--ref-accent, var(--vscode-list-hoverForeground, currentColor)) 13%, var(--vscode-list-hoverBackground, transparent));
+}
+.branch-row.current { font-weight: 600; }
+.branch-row[aria-pressed="true"] {
+  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--vscode-list-activeSelectionBackground);
+}
+.branch-icon { flex: 0 0 14px; color: var(--vscode-descriptionForeground); text-align: center; }
+.branch-head, .branch-local { --ref-accent: var(--vscode-charts-green, #62c29b); }
+.branch-remote { --ref-accent: var(--vscode-charts-purple, #a277ff); }
+.branch-tag { --ref-accent: var(--vscode-charts-yellow, #d7ba7d); }
+.branch-row .branch-icon { color: var(--ref-accent, var(--vscode-descriptionForeground)); }
+.branch-row[aria-pressed="true"] .branch-icon { color: inherit; }
 .branch-state-badges { display: flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; }
 .branch-state {
   max-width: 120px;
@@ -399,51 +396,142 @@ body.resizing-panes { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 5px;
-  min-height: 25px;
-  margin: 0 4px;
+  width: 100%;
+  min-height: 24px;
   padding: 2px 8px 2px var(--branch-indent, 7px);
   border-radius: 3px;
-  cursor: pointer;
   font-weight: 600;
+  text-align: left;
 }
+.branch-folder-row.branch-section-title { margin-top: 6px; color: var(--vscode-descriptionForeground); }
 .branch-folder-row:hover { background: var(--vscode-list-hoverBackground); }
 .branch-folder-row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .branch-folder-row .chevron-icon { width: 9px; height: 9px; flex-basis: 9px; -webkit-mask-size: 8px 8px; mask-size: 8px 8px; }
 .branch-folder-icon { color: var(--vscode-descriptionForeground); }
 
-.history-toolbar .filter { width: min(320px, 45%); }
-.filter-chip { display: inline-flex; align-items: center; gap: 3px; padding: 3px 4px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
-.filter-chip .chevron-icon { width: 9px; height: 9px; flex-basis: 9px; -webkit-mask-size: 8px 8px; mask-size: 8px 8px; }
+.history-pane { container-type: inline-size; --log-author-width: clamp(75px, 17%, 152px); --log-date-width: clamp(90px, 21%, 162px); }
+.history-toolbar { flex-wrap: wrap; }
+.history-toolbar .filter { min-width: 100px; flex: 1 1 120px; }
+.log-filter-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(144px, 42%);
+  border-color: var(--vscode-input-border, var(--vscode-panel-border));
+}
+.log-filter-button.filtered, .log-filter-button[aria-expanded="true"] {
+  color: var(--vscode-textLink-foreground);
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.log-filter-button .chevron-icon { flex-basis: 9px; width: 9px; mask-size: 8px 8px; }
+.log-filter-popover {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  width: min(300px, calc(100vw - 8px));
+  padding: 5px;
+  gap: 4px;
+  flex-direction: column;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, var(--vscode-panel-border)));
+  border-radius: 5px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--vscode-panel-background)));
+  box-shadow: 0 4px 16px var(--vscode-widget-shadow);
+}
+.log-filter-choices { max-height: min(280px, var(--log-choice-height, 190px)); overflow: auto; }
+.log-filter-choice { display: flex; width: 100%; align-items: center; gap: 8px; padding: 4px 7px; text-align: left; }
+.log-filter-choice[aria-pressed="true"] { background: var(--vscode-list-inactiveSelectionBackground); }
+.log-choice-text { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.log-choice-check { min-width: 12px; color: var(--vscode-textLink-foreground); text-align: center; }
+.log-choice-heading { padding: 7px 8px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.log-filter-choice[class*="branch-"] { border-left: 2px solid var(--ref-accent); }
+.log-list { flex: 1; min-height: 0; overflow: auto; }
 .log-columns {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: grid;
-  grid-template-columns: minmax(calc(210px + var(--graph-width, 30px)), 1fr) minmax(125px, .45fr) minmax(110px, .35fr) 145px;
+  grid-template-columns: minmax(0, 1fr) var(--log-author-width) var(--log-date-width);
   min-height: 23px;
-  padding: 3px 8px 3px 34px;
+  padding: 3px 8px 3px 12px;
   border-bottom: 1px solid var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
+  background: var(--vscode-panel-background);
   font-size: 11px;
 }
-.log-list { height: calc(100% - 57px); overflow: auto; }
 .commit-row {
   display: grid;
-  grid-template-columns: var(--graph-width, 30px) minmax(180px, 1fr) minmax(125px, .45fr) minmax(110px, .35fr) 145px;
+  grid-template-columns: var(--graph-width, 30px) minmax(0, 1fr) var(--log-author-width) var(--log-date-width);
   align-items: center;
-  min-height: 29px;
-  padding: 1px 8px;
+  height: 28px;
+  padding: 0 8px;
   cursor: pointer;
 }
 .commit-row:hover { background: var(--vscode-list-hoverBackground); }
 .commit-row.selected { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
 .commit-row.head:not(.selected) { box-shadow: inset 2px 0 0 var(--vscode-textLink-foreground); }
-.graph-cell { min-width: 0; align-self: stretch; overflow: hidden; }
-.graph-svg { display: block; width: 100%; height: 100%; min-height: 29px; overflow: visible; }
+.graph-cell { position: relative; min-width: 0; align-self: stretch; overflow: hidden; }
+.graph-svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .graph-line { fill: none; stroke-width: 2; stroke-linecap: round; }
 .graph-line.parent-line { stroke-width: 2.2; }
 .graph-node { stroke-width: 1.5; }
 .graph-node.merge { stroke-width: 2.5; }
+.graph-node-trigger {
+  position: absolute;
+  top: 50%;
+  left: var(--node-x);
+  transform: translate(-50%, -50%);
+  width: 17px;
+  height: 19px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.graph-node-trigger:hover, .graph-node-trigger[aria-expanded="true"] {
+  border-color: var(--vscode-focusBorder);
+  background: transparent;
+}
+.trace-active .graph-line:not(.trace-edge), .trace-active .commit-row:not(.trace-row) .graph-node { opacity: .30; }
+.graph-line.trace-edge { stroke-width: 2.8; }
+.commit-row.trace-row:not(.selected) {
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 9%, transparent);
+}
+.commit-row.trace-tip:not(.selected) {
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 18%, transparent);
+}
+.trace-tip .ref:hover { border-color: var(--vscode-focusBorder); }
+.graph-details {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--graph-width, 30px) minmax(0, 1fr);
+  padding: 0 8px;
+}
+.graph-details-rails {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  width: var(--graph-width, 30px);
+  height: 100%;
+}
+.graph-details-card {
+  grid-column: 2;
+  min-width: 0;
+  margin: 1px 0 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+.graph-details-revision, .graph-details-parents { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.graph-details-revision code { flex: 1; min-width: 100px; color: var(--vscode-descriptionForeground); }
+.graph-details-body { max-height: 130px; overflow: auto; margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.graph-details-parents button { color: var(--vscode-textLink-foreground); }
 .commit-subject, .commit-author, .commit-date { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.commit-refs { overflow: hidden; white-space: nowrap; }
-.ref { display: inline-flex; align-items: center; gap: 3px; max-width: 170px; margin-right: 4px; padding: 0 5px 0 3px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 65%, transparent); border-radius: 8px; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 12%, transparent); font-size: 10px; text-overflow: ellipsis; vertical-align: middle; }
+.commit-summary { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 7px; padding-right: 9px; }
+.commit-subject { flex: 1; }
+.commit-refs { display: flex; gap: 4px; max-width: 55%; min-width: 0; overflow: hidden; }
+.ref { display: inline-flex; align-items: center; min-width: 15px; gap: 3px; max-width: 190px; padding: 0 5px 0 3px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 65%, transparent); border-radius: 5px; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-charts-purple, #a277ff) 12%, transparent); font-size: 10px; }
 .ref-icon { color: var(--vscode-charts-purple, #a277ff); font-size: 11px; }
 .ref.head, .ref.branch, .ref.worktree { border-color: color-mix(in srgb, var(--vscode-charts-green, #62c29b) 70%, transparent); background: color-mix(in srgb, var(--vscode-charts-green, #62c29b) 12%, transparent); }
 .ref.head .ref-icon, .ref.branch .ref-icon, .ref.worktree .ref-icon { color: var(--vscode-charts-green, #62c29b); }
@@ -526,16 +614,18 @@ body.resizing-panes { cursor: col-resize; user-select: none; }
 
 @media (max-width: 1050px) {
   .log-workspace { grid-template-columns: minmax(150px, var(--branches-pane-width, 190px)) 5px minmax(300px, 1fr) 5px minmax(220px, var(--commit-pane-width, 250px)); }
-  .filter-chip { display: none; }
-  .commit-row { grid-template-columns: var(--graph-width, 30px) minmax(180px, 1fr) minmax(90px, .35fr) 110px; }
-  .log-columns { grid-template-columns: minmax(calc(180px + var(--graph-width, 30px)), 1fr) minmax(90px, .35fr) 110px; }
-  .commit-refs, .log-columns span:nth-child(2) { display: none; }
+}
+
+@container (max-width: 390px) {
+  .log-columns { grid-template-columns: minmax(0, 1fr) var(--log-author-width); }
+  .commit-row { grid-template-columns: var(--graph-width, 30px) minmax(0, 1fr) var(--log-author-width); }
+  .commit-date { display: none; }
 }
 
 @media (max-width: 760px) {
   .product-title, #repository, .branch-badge { display: none; }
   .changes-workspace { grid-template-columns: minmax(260px, 42%) 1fr; }
-  .log-workspace { grid-template-columns: minmax(320px, 1fr) minmax(220px, var(--commit-pane-width, 240px)); }
+  .log-workspace { grid-template-columns: minmax(0, 1fr) minmax(145px, 32%); }
   .branches-pane, .pane-resizer { display: none; }
   .conflict-content { padding: 12px; }
   .conflict-columns, .conflict-row { grid-template-columns: minmax(210px, 1fr) 145px 145px; }

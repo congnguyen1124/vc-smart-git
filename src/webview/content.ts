@@ -127,7 +127,7 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
     <section id="logTab" class="tab-page log-workspace hidden">
       <aside class="branches-pane">
         <div class="pane-toolbar">
-          <input id="branchFilter" class="filter" type="search" placeholder="Branch or tag">
+          <input id="branchFilter" class="filter" type="search" placeholder="Find a branch or tag" aria-label="Find a branch or tag">
         </div>
         <div id="branchTree" class="branch-tree"></div>
       </aside>
@@ -136,16 +136,18 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
 
       <section class="history-pane">
         <div class="pane-toolbar history-toolbar">
-          <input id="logFilter" class="filter" type="search" placeholder="Text or hash">
-          <span class="filter-chip">Branch<span class="chevron-icon" aria-hidden="true"></span></span>
-          <span class="filter-chip">User<span class="chevron-icon" aria-hidden="true"></span></span>
-          <span class="filter-chip">Date<span class="chevron-icon" aria-hidden="true"></span></span>
-          <span class="filter-chip">Paths<span class="chevron-icon" aria-hidden="true"></span></span>
+          <input id="logFilter" class="filter" type="search" placeholder="Search commits" aria-label="Search commits by text or hash">
+          <button id="logBranchButton" class="log-filter-button" data-action="openLogFilter" data-filter="branch" aria-controls="logFilterPopover" aria-expanded="false">
+            <span id="logBranchLabel" class="ellipsis">Branch</span><span class="chevron-icon" aria-hidden="true"></span>
+          </button>
+          <button id="logUserButton" class="log-filter-button" data-action="openLogFilter" data-filter="user" aria-controls="logFilterPopover" aria-expanded="false">
+            <span id="logUserLabel" class="ellipsis">User</span><span class="chevron-icon" aria-hidden="true"></span>
+          </button>
+          <button id="clearLogFilters" class="icon-button hidden" data-action="clearLogFilters" title="Clear log filters" aria-label="Clear log filters">×</button>
           <span class="spacer"></span>
           <button class="icon-button" data-action="refresh" title="Refresh log">↻</button>
         </div>
-        <div class="log-columns" aria-hidden="true"><span>Graph &amp; Subject</span><span>Refs</span><span>Author</span><span>Date</span></div>
-        <div id="logList" class="log-list" role="list"></div>
+        <div id="logList" class="log-list" role="list" aria-label="Commit history"></div>
       </section>
 
       <div class="pane-resizer" data-resizer="right" role="separator" aria-orientation="vertical" aria-label="Resize commit details pane" aria-controls="commitDetails" title="Drag to resize commit details · Double-click to reset" tabindex="0"></div>
@@ -184,6 +186,10 @@ export function webviewContent(webview: vscode.Webview, extensionUri: vscode.Uri
     <button data-action="refresh">Try Again</button>
   </section>
   <div id="contextMenu" class="context-menu hidden" role="menu" aria-label="Git actions"></div>
+  <section id="logFilterPopover" class="log-filter-popover hidden" aria-label="Log filter">
+    <input id="logChoiceSearch" type="search" aria-label="Search filter options">
+    <div id="logFilterChoices" class="log-filter-choices"></div>
+  </section>
   <div id="toast" class="toast hidden" role="status"></div>
   <script nonce="${token}" src="${graphScriptUri}"></script>
   <script nonce="${token}" src="${selectionScriptUri}"></script>

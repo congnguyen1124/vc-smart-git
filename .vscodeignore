@@ -2,6 +2,7 @@
 .gitignore
 .github/**
 .vscode/**
+reference/**
 src/**
 scripts/**
 tsconfig.json

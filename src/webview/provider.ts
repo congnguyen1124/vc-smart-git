@@ -1,11 +1,12 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitCommandError, GitRepository } from '../git/repository';
-import type { GitBranch, GitCommit, GitConflictState, GitOperation, GitStatus, RepositorySummary } from '../git/types';
+import type { GitBranch, GitCommit, GitConflictState, GitOperation, GitStatus, GitTag, RepositorySummary } from '../git/types';
 import { GitContentProvider, resolveRepositoryPath } from '../vscode/diffProvider';
 import { resolveMaterialIconPath, type MaterialIconThemeData } from '../vscode/materialIcons';
 import { discoverRepositories } from '../vscode/repositoryDiscovery';
 import { webviewContent } from './content';
+import { MergePanelManager } from './mergePanel';
 
 interface ViewState {
   repositories: RepositorySummary[];
@@ -13,6 +14,7 @@ interface ViewState {
   status?: GitStatus;
   commits: GitCommit[];
   branches: GitBranch[];
+  tags?: GitTag[];
   operation?: GitOperation;
   conflicts?: GitConflictState;
 }
@@ -49,6 +51,9 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
   private view: vscode.WebviewView | undefined;
   private state: ViewState = { repositories: [], commits: [], branches: [] };
   private activeRepository: GitRepository | undefined;
+  private filteredLog?: { root: string; commits: GitCommit[] };
+  private pendingLogQuery?: symbol;
+  private readonly mergePanels: MergePanelManager;
   private refreshing: Promise<void> | undefined;
   private refreshAgain = false;
   private refreshTimer: NodeJS.Timeout | undefined;
@@ -59,7 +64,12 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     private readonly context: vscode.ExtensionContext,
     private readonly contentProvider: GitContentProvider,
     private readonly output: vscode.OutputChannel,
-  ) {}
+  ) {
+    this.mergePanels = new MergePanelManager(context.extensionUri, async () => {
+      this.post({ type: 'toast', message: 'Merge result staged' });
+      await this.refresh();
+    });
+  }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -180,6 +190,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
 
       if (!activeRoot) {
         this.activeRepository = undefined;
+        this.filteredLog = undefined;
         this.state = { repositories, commits: [], branches: [] };
         this.post({ type: 'state', state: this.state, fileIcons: {} });
         return;
@@ -188,9 +199,10 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
       const repository = new GitRepository(activeRoot, gitPath);
       const limit = vscode.workspace.getConfiguration('vcSmartGit').get('logLimit', 200);
       const status = await repository.status();
-      const [commits, branches, operation] = await Promise.all([
+      const [commits, branches, tags, operation] = await Promise.all([
         repository.log(limit),
         repository.branches(),
+        repository.tags(),
         repository.operation(),
       ]);
       const hasConflicts = status.changes.some((change) => change.conflicted);
@@ -198,12 +210,16 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
         ? await repository.conflicts(status, operation)
         : undefined;
       this.activeRepository = repository;
+      if (this.filteredLog?.root !== activeRoot) {
+        this.filteredLog = undefined;
+      }
       this.state = {
         repositories,
         activeRoot,
         status,
         commits,
         branches,
+        tags,
         ...(operation ? { operation } : {}),
         ...(conflicts ? { conflicts } : {}),
       };
@@ -286,6 +302,8 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
       case 'refresh': case 'fetch': case 'pull': case 'push': case 'stageAll': case 'unstageAll': case 'continueOperation': case 'abortOperation':
         await this.runAction(type); return;
       case 'selectRepository': await this.selectRepository(stringValue(value, 'root')); return;
+      case 'queryLog': await this.queryLog(value); return;
+      case 'loadLogAuthors': await this.loadLogAuthors(value); return;
       case 'stage': await this.stage(pathValues(value)); return;
       case 'unstage': await this.unstage(pathValues(value)); return;
       case 'discard': await this.discard(pathValues(value)); return;
@@ -341,7 +359,63 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
   }
 
   private validHash(hash: string | undefined): hash is string {
-    return Boolean(hash && /^[0-9a-f]{7,64}$/i.test(hash) && this.state.commits.some((commit) => commit.hash === hash));
+    return Boolean(hash && /^[0-9a-f]{7,64}$/i.test(hash) && this.findCommit(hash));
+  }
+
+  private findCommit(hash: string): GitCommit | undefined {
+    if (this.activeRepository?.root !== this.state.activeRoot) {
+      return undefined;
+    }
+    const filtered = this.filteredLog?.root === this.state.activeRoot ? this.filteredLog?.commits : undefined;
+    return this.state.commits.find((commit) => commit.hash === hash)
+      ?? filtered?.find((commit) => commit.hash === hash);
+  }
+
+  private async queryLog(message: Record<string, unknown>): Promise<void> {
+    const repository = this.activeRepository;
+    const root = stringValue(message, 'root');
+    const requestId = message.requestId;
+    if (!repository || root !== repository.root || root !== this.state.activeRoot || !Number.isSafeInteger(requestId)) {
+      return;
+    }
+    const ref = stringValue(message, 'ref');
+    const name = stringValue(message, 'authorName');
+    const email = stringValue(message, 'authorEmail');
+    const author = name !== undefined && email !== undefined && (name || email) ? { name, email } : undefined;
+    const query = Symbol();
+    this.pendingLogQuery = query;
+    const isCurrent = () => this.pendingLogQuery === query && this.state.activeRoot === root;
+    try {
+      if (ref && ref !== 'HEAD' && !this.state.branches.some((branch) => branch.ref === ref)
+        && !this.state.tags?.some((tag) => tag.ref === ref)) {
+        throw new Error('This branch or tag no longer exists.');
+      }
+      const limit = vscode.workspace.getConfiguration('vcSmartGit').get('logLimit', 200);
+      const commits = await repository.log(limit, { ref, author });
+      if (isCurrent()) {
+        this.filteredLog = { root, commits };
+        this.post({ type: 'logResult', root, requestId, commits });
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.post({ type: 'logResult', root, requestId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  private async loadLogAuthors(message: Record<string, unknown>): Promise<void> {
+    const repository = this.activeRepository;
+    const root = stringValue(message, 'root');
+    const requestId = message.requestId;
+    if (!repository || root !== repository.root || root !== this.state.activeRoot || !Number.isSafeInteger(requestId)) {
+      return;
+    }
+    try {
+      const authors = await repository.logAuthors();
+      this.post({ type: 'logAuthors', root, requestId, authors });
+    } catch (error) {
+      this.post({ type: 'logAuthors', root, requestId, error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   private async stage(paths: readonly string[]): Promise<void> {
@@ -482,16 +556,12 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
   }
 
   private async openMerge(filePath: string | undefined): Promise<void> {
-    if (!filePath || !this.activeRepository || !this.validPaths([filePath]).length) {
+    if (!filePath || !this.activeRepository || !this.state.status?.changes.some(
+      (change) => change.path === filePath && change.conflicted,
+    )) {
       return;
     }
-    const uri = vscode.Uri.file(resolveRepositoryPath(this.activeRepository.root, filePath));
-    try {
-      await vscode.commands.executeCommand('git.openMergeEditor', uri);
-    } catch {
-      await vscode.window.showTextDocument(uri, { preview: false });
-      void vscode.window.showInformationMessage('The Merge Editor was unavailable, so the conflicted file was opened in the text editor.');
-    }
+    this.mergePanels.open(this.activeRepository, filePath, this.state.conflicts);
   }
 
   private async openDiff(filePath: string | undefined, staged: boolean, permanent = false): Promise<void> {
@@ -757,14 +827,16 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     if (!this.validHash(hash) || !this.activeRepository) {
       return;
     }
+    const repository = this.activeRepository;
     try {
       const [details, files] = await Promise.all([
-        this.activeRepository.commitDetails(hash),
-        this.activeRepository.commitFiles(hash),
+        repository.commitDetails(hash),
+        repository.commitFiles(hash),
       ]);
-      const commit = this.state.commits.find((entry) => entry.hash === hash);
+      const commit = this.findCommit(hash);
       this.post({
         type: 'commitDetails',
+        root: repository.root,
         hash,
         title: commit?.subject ?? hash,
         details,
@@ -784,7 +856,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
     if (!this.validHash(hash) || !filePath || !this.activeRepository) {
       return;
     }
-    const knownCommit = this.state.commits.find((commit) => commit.hash === hash);
+    const knownCommit = this.findCommit(hash);
     if (!knownCommit) {
       return;
     }
@@ -914,6 +986,7 @@ export class SmartGitViewProvider implements vscode.WebviewViewProvider, vscode.
   }
 
   public dispose(): void {
+    this.mergePanels.dispose();
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
     }

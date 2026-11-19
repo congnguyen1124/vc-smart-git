@@ -24,6 +24,12 @@ Explore local and remote branches alongside a colored multi-lane commit graph, r
 
 ![VC Smart Git commit Log](resources/screenshots/log.jpg)
 
+### Merge Editor
+
+Compare Current and Incoming, edit Result, and resolve conflicts one block at a time in the Smart Git editor tab.
+
+![Smart Git merge editor showing a highlighted conflict in Current, Result, and Incoming](resources/screenshots/merge-editor.png)
+
 ### Git Blame
 
 Annotate the active editor with commit dates and authors, including a clear marker for uncommitted lines.
@@ -56,15 +62,14 @@ The Local Changes tab provides a focused working-tree workflow:
 
 ## Conflict Resolution
 
-Conflicted files are surfaced at the top of Changes and provide dedicated actions:
+Open **Local Changes → Merge Conflicts → Resolve**. Select a file or choose **Resolve Manually** to open it in the Smart Git Merge Editor.
 
-- Expand the dedicated **Merge Conflicts** section and open the conflict resolver with **Resolve**.
-- Review every unresolved file with separate **Yours** and **Theirs** states and accept either side directly.
-- Open VS Code's three-way Merge Editor by selecting a file or choosing **Resolve Manually**.
-- Use **Resolve Simple Conflicts** when both sides are identical or both deleted; the button stays disabled when an automatic result would be ambiguous.
-- Finish the active merge, rebase, cherry-pick, or revert only after every file is resolved.
-- Mark a file as resolved from its context menu when it has already been edited manually.
-- Continue or abort merge, rebase, cherry-pick, or revert operations.
+- Compare **Current** and **Incoming** alongside the editable **Result**. Switch to **Full revisions** for more context or **Show base** to see the common ancestor when available.
+- Navigate between conflict blocks and use the inline **»** or **«** to take Current or Incoming. Choose **×** to ignore a side for that block and **↶** to bring it back. When both sides are ignored, Smart Git uses Base if the conflict includes it.
+- Use **Use Both** to combine the two sides. Diff3 conflicts also offer **Use Base**. **Undo choice** reverses the last block action.
+- Choose **Apply & Stage** once all conflict markers have been cleared. Smart Git checks for external changes to the file and index before saving. The active Git operation can be finished separately after all files are resolved.
+- Accept an entire revision or a deletion when that is the intended result. Files that cannot be edited as UTF-8 text use these whole-file actions.
+- Use **Resolve Simple Conflicts** from the conflict list when both sides are identical or both deleted.
 
 Destructive actions require confirmation by default.
 
@@ -73,6 +78,7 @@ Destructive actions require confirmation by default.
 The Log tab combines branch navigation, commit history, and commit details:
 
 - Follow a colored multi-lane commit graph through branches and merges.
+- Hover over a branch or graph node to highlight its first-parent history. Click a graph node to expand or collapse its revision details and parent links.
 - Browse local and remote branches in a collapsible, path-aware tree with explicit HEAD, linked-worktree, ahead, and behind states.
 - See accurate local, remote, tag, current checkout, and linked-worktree badges on the commit where each ref points.
 - Drag the vertical splitters to resize the branch tree, commit history, and commit details panes; double-click a splitter to restore its default width.

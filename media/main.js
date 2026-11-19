@@ -7,6 +7,20 @@
   let state = { repositories: [], commits: [], branches: [] };
   let activeTab = persisted.activeTab || 'changes';
   let selectedCommit;
+  let logRef = '';
+  let logAuthor;
+  let filteredCommits;
+  let logRequestId = 0;
+  let logError = '';
+  let logSearchTimer;
+  let visibleCommits = [];
+  let expandedCommit;
+  let hoveredLogTip;
+  let logCommitsByHash = new Map();
+  let openLogFilterType;
+  let logAuthors;
+  let logAuthorsError = false;
+  let logAuthorRequestId = 0;
   let selectedChange;
   let selectedChangeKeys = new Set();
   let changeSelectionAnchor;
@@ -27,6 +41,7 @@
   let contextSource;
 
   const byId = (id) => document.getElementById(id);
+  const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const post = (type, payload = {}) => vscode.postMessage({ type, ...payload });
   const show = (node, visible) => node.classList.toggle('hidden', !visible);
   const element = (tag, className, text) => {
@@ -45,6 +60,11 @@
   });
 
   function setTab(tab) {
+    const enteringLog = tab === 'log' && activeTab !== 'log';
+    if (tab !== 'log') {
+      closeLogFilter();
+      highlightLogTrace();
+    }
     activeTab = tab;
     saveUiState();
     const definitions = [
@@ -59,6 +79,10 @@
     });
     show(byId('conflictView'), conflictViewOpen);
     byId('app').classList.toggle('conflict-mode', conflictViewOpen);
+    if (enteringLog && (logRef || logAuthor)) {
+      requestLog(true);
+      renderLog();
+    }
   }
 
   function statusFor(change, staged) {
@@ -421,7 +445,7 @@
       const parts = fileLabel({ path: conflict.path });
       const label = element('span', 'conflict-file-label', parts.name);
       if (parts.directory) label.append(element('span', 'file-dir', parts.directory));
-      file.append(label, element('span', 'conflict-progress', '0/1'));
+      file.append(label);
       row.append(file);
 
       [['ours', conflict.ours, conflict.oursAvailable], ['theirs', conflict.theirs, conflict.theirsAvailable]].forEach(([side, status, available]) => {
@@ -446,34 +470,40 @@
   function humanDate(value) {
     if (!value) return '';
     const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    return Number.isNaN(date.valueOf()) ? value : dateFormatter.format(date);
   }
 
   function renderBranches() {
     const target = byId('branchTree');
+    const previousScroll = target.scrollTop;
     target.replaceChildren();
     const filter = byId('branchFilter').value.trim().toLowerCase();
 
-    const appendBranchRow = (branch, label, depth) => {
+    const appendBranchRow = (branch, label, depth, kind) => {
       const checkedOut = Boolean(branch.current || branch.worktreePath);
-      const row = element('div', `branch-row${branch.current ? ' current' : ''}${!branch.current && branch.worktreePath ? ' worktree' : ''}`);
-      row.dataset.context = 'branch';
+      const row = element('button', `branch-row branch-${kind}${branch.current ? ' current' : ''}`);
+      row.dataset.action = 'setLogRef';
+      row.dataset.logRef = branch.ref;
+      if (branch.hash) row.dataset.logTip = branch.hash;
+      if (kind === 'local' || kind === 'remote') row.dataset.context = 'branch';
       row.dataset.branch = branch.name;
       row.dataset.remote = String(branch.remote);
       row.dataset.current = String(branch.current);
       row.dataset.checkedOut = String(checkedOut);
       row.style.setProperty('--branch-indent', `${20 + depth * 15}px`);
-      row.tabIndex = 0;
+      row.setAttribute('aria-pressed', String(logRef === branch.ref));
       const details = [branch.name];
       if (branch.current) details.push('Currently checked out (HEAD)');
       else if (branch.worktreePath) details.push(`Checked out in ${branch.worktreePath}`);
       if (branch.upstream) details.push(`Tracks ${branch.upstream}`);
       if (branch.ahead || branch.behind) details.push(`Ahead ${branch.ahead} · Behind ${branch.behind}`);
       row.title = details.join('\n');
-      row.append(element('span', 'branch-icon', branch.current ? '✓' : branch.worktreePath ? '◆' : branch.remote ? '◇' : '⑂'));
+      const icon = element('span', 'branch-icon', { all: '≡', head: '◆', local: '⑂', remote: '◇', tag: '◇' }[kind]);
+      icon.setAttribute('aria-hidden', 'true');
+      row.append(icon);
       row.append(element('span', 'ellipsis', label));
       const badges = element('span', 'branch-state-badges');
-      if (branch.current) badges.append(element('span', 'branch-state checkout', 'HEAD'));
+      if (branch.current && kind !== 'head') badges.append(element('span', 'branch-state checkout', 'HEAD'));
       else if (branch.worktreePath) badges.append(element('span', 'branch-state checkout', 'worktree'));
       if (branch.ahead) badges.append(element('span', 'branch-state ahead', `↑${branch.ahead}`));
       if (branch.behind) badges.append(element('span', 'branch-state behind', `↓${branch.behind}`));
@@ -482,34 +512,43 @@
     };
 
     const appendNodes = (nodes, sectionId, pathParts = [], depth = 0) => {
-      [...nodes.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([name, node]) => {
+      [...nodes.entries()].sort(([left, a], [right, b]) => Number(Boolean(b.branch?.current))
+        - Number(Boolean(a.branch?.current)) || left.localeCompare(right)).forEach(([name, node]) => {
         const currentPath = [...pathParts, name];
         if (node.children.size) {
           const groupId = `${sectionId}:${currentPath.join('/')}`;
-          const collapsed = collapsedBranchGroups.has(groupId);
-          const folder = element('div', 'branch-folder-row');
+          const collapsed = !filter && collapsedBranchGroups.has(groupId);
+          const folder = element('button', 'branch-folder-row');
           folder.dataset.action = 'toggleBranchGroup';
           folder.dataset.branchGroup = groupId;
           folder.style.setProperty('--branch-indent', `${7 + depth * 15}px`);
-          folder.tabIndex = 0;
+          folder.setAttribute('aria-expanded', String(!collapsed));
           folder.append(element('span', `chevron-icon${collapsed ? ' collapsed' : ''}`));
           folder.append(element('span', 'branch-folder-icon', '▱'));
           folder.append(element('span', 'ellipsis', name));
           target.append(folder);
           if (!collapsed) {
-            if (node.branch) appendBranchRow(node.branch, name, depth + 1);
+            if (node.branch) appendBranchRow(node.branch, name, depth + 1, sectionId);
             appendNodes(node.children, sectionId, currentPath, depth + 1);
           }
         } else if (node.branch) {
-          appendBranchRow(node.branch, name, depth);
+          appendBranchRow(node.branch, name, depth, sectionId);
         }
       });
     };
 
-    const appendSection = (title, branches, remote) => {
-      const filtered = branches.filter((branch) => !filter || branch.name.toLowerCase().includes(filter));
+    const appendSection = ({ title, kind, choices }) => {
+      const filtered = choices.filter((branch) => branch.name.toLowerCase().includes(filter));
       if (!filtered.length) return;
-      target.append(element('div', 'branch-section-title', title));
+      const groupId = `section:${kind}`;
+      const collapsed = !filter && collapsedBranchGroups.has(groupId);
+      const heading = element('button', 'branch-folder-row branch-section-title');
+      heading.dataset.action = 'toggleBranchGroup';
+      heading.dataset.branchGroup = groupId;
+      heading.setAttribute('aria-expanded', String(!collapsed));
+      heading.append(element('span', `chevron-icon${collapsed ? ' collapsed' : ''}`), element('span', '', title));
+      target.append(heading);
+      if (collapsed) return;
       const nodes = new Map();
       filtered.forEach((branch) => {
         let cursor = nodes;
@@ -520,10 +559,171 @@
           cursor = node.children;
         });
       });
-      appendNodes(nodes, remote ? 'remote' : 'local');
+      appendNodes(nodes, kind);
     };
-    appendSection('Local', state.branches.filter((branch) => !branch.remote), false);
-    appendSection('Remote', state.branches.filter((branch) => branch.remote), true);
+    if (!filter) {
+      appendBranchRow({ ref: '', name: 'All branches' }, 'All branches', 0, 'all');
+      const head = headChoice();
+      if (head) appendBranchRow(head, head.name, 0, 'head');
+    }
+    logRefGroups().forEach(appendSection);
+    if (!target.childElementCount) target.append(element('div', 'empty compact', 'No matching branches or tags'));
+    target.scrollTop = previousScroll;
+  }
+
+  function headChoice() {
+    if (!state.status?.oid) return undefined;
+    const branch = state.status.branch;
+    return { ref: 'HEAD', hash: state.status.oid, name: branch === '(detached)' ? 'Detached HEAD' : `HEAD · ${branch}` };
+  }
+
+  function logRefGroups() {
+    return [
+      { title: 'Local branches', kind: 'local', choices: state.branches.filter((branch) => !branch.remote) },
+      { title: 'Remote branches', kind: 'remote', choices: state.branches.filter((branch) => branch.remote) },
+      { title: 'Tags', kind: 'tag', choices: state.tags || [] },
+    ];
+  }
+
+  function updateLogFilterButtons() {
+    const ref = logRef === 'HEAD'
+      ? headChoice()
+      : logRefGroups().flatMap((group) => group.choices).find((choice) => choice.ref === logRef);
+    const branchLabel = ref?.name || 'Branch';
+    const userLabel = logAuthor?.name || logAuthor?.email || 'User';
+    for (const [kind, label, active] of [['Branch', branchLabel, logRef], ['User', userLabel, logAuthor]]) {
+      const button = byId(`log${kind}Button`);
+      byId(`log${kind}Label`).textContent = active ? `${kind} · ${label}` : kind;
+      button.title = active ? `${kind}: ${label}` : `Filter by ${kind.toLowerCase()}`;
+      if (kind === 'User' && logAuthor?.email && logAuthor.name) button.title += ` <${logAuthor.email}>`;
+      button.setAttribute('aria-label', button.title);
+      button.classList.toggle('filtered', Boolean(active));
+    }
+    show(byId('clearLogFilters'), Boolean(logRef || logAuthor || byId('logFilter').value));
+  }
+
+  function requestLog(keepResults = false) {
+    logRequestId += 1;
+    logError = '';
+    if (!keepResults || (!logRef && !logAuthor)) filteredCommits = undefined;
+    if (logRef || logAuthor) {
+      post('queryLog', {
+        root: state.activeRoot,
+        requestId: logRequestId,
+        ref: logRef,
+        authorName: logAuthor?.name,
+        authorEmail: logAuthor?.email,
+      });
+    }
+  }
+
+  function applyLogFilters(ref, author) {
+    logRef = ref;
+    logAuthor = author;
+    requestLog();
+    updateLogFilterButtons();
+    renderBranches();
+    renderLog();
+  }
+
+  function closeLogFilter(restoreFocus = false) {
+    if (!openLogFilterType) return;
+    const button = byId(openLogFilterType === 'branch' ? 'logBranchButton' : 'logUserButton');
+    openLogFilterType = undefined;
+    button.setAttribute('aria-expanded', 'false');
+    show(byId('logFilterPopover'), false);
+    if (restoreFocus) button.focus();
+  }
+
+  function renderLogFilterChoices() {
+    if (!openLogFilterType) return;
+    const target = byId('logFilterChoices');
+    const query = byId('logChoiceSearch').value.trim().toLowerCase();
+    const branchFilter = openLogFilterType === 'branch';
+    target.replaceChildren();
+    const appendChoice = (label, { ref, authorIndex, selected, email, kind } = {}) => {
+      const button = element('button', 'log-filter-choice');
+      button.dataset.action = 'chooseLogFilter';
+      if (branchFilter) button.dataset.logRef = ref ?? '';
+      else if (authorIndex !== undefined) button.dataset.authorIndex = authorIndex;
+      button.setAttribute('aria-pressed', String(Boolean(selected)));
+      if (kind) button.classList.add(`branch-${kind}`);
+      const text = element('span', 'log-choice-text');
+      text.append(element('span', 'ellipsis', label));
+      if (email) text.append(element('small', 'ellipsis muted', email));
+      button.title = email ? `${label} <${email}>` : label;
+      button.append(text);
+      const check = element('span', 'log-choice-check', selected ? '✓' : '');
+      check.setAttribute('aria-hidden', 'true');
+      button.append(check);
+      target.append(button);
+    };
+    if (!query) {
+      appendChoice(branchFilter ? 'All branches' : 'All users', { selected: branchFilter ? !logRef : !logAuthor });
+    }
+    if (branchFilter) {
+      const head = headChoice();
+      if (head && head.name.toLowerCase().includes(query)) {
+        appendChoice(head.name, { ref: head.ref, selected: logRef === head.ref, kind: 'head' });
+      }
+      for (const { title, kind, choices } of logRefGroups()) {
+        const matching = choices.filter((entry) => entry.name.toLowerCase().includes(query))
+          .sort((a, b) => Number(Boolean(b.current)) - Number(Boolean(a.current)) || a.name.localeCompare(b.name));
+        if (!matching.length) continue;
+        target.append(element('div', 'log-choice-heading', title));
+        matching.forEach((entry) => appendChoice(entry.name, { ref: entry.ref, selected: logRef === entry.ref, kind }));
+      }
+    } else {
+      logAuthors?.forEach((author, authorIndex) => {
+        const identity = `${author.name} ${author.email}`.toLowerCase();
+        if (!identity.includes(query)) return;
+        appendChoice(author.name || author.email, {
+          authorIndex,
+          selected: author.name === logAuthor?.name && author.email === logAuthor?.email,
+          email: author.name ? author.email : '',
+        });
+      });
+      if (logAuthorsError || !logAuthors) {
+        target.append(element('div', 'log-choice-heading', logAuthorsError ? 'Unable to load users' : 'Loading users…'));
+        return;
+      }
+    }
+    if (!target.childElementCount || (!branchFilter && !query && !logAuthors.length)) {
+      target.append(element('div', 'log-choice-heading', query ? 'No matching options' : 'No authors found'));
+    }
+  }
+
+  function positionLogFilter(button) {
+    const rect = button.getBoundingClientRect();
+    const popover = byId('logFilterPopover');
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    const openAbove = below < 170 && above > below;
+    popover.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - popover.offsetWidth - 4))}px`;
+    popover.style.setProperty('--log-choice-height', `${Math.max(1, (openAbove ? above : below) - 42)}px`);
+    popover.style.top = openAbove ? 'auto' : `${rect.bottom + 3}px`;
+    popover.style.bottom = openAbove ? `${window.innerHeight - rect.top + 3}px` : 'auto';
+  }
+
+  function openLogFilter(kind, button) {
+    if (openLogFilterType === kind) {
+      closeLogFilter(true);
+      return;
+    }
+    closeLogFilter();
+    openLogFilterType = kind;
+    button.setAttribute('aria-expanded', 'true');
+    const search = byId('logChoiceSearch');
+    search.value = '';
+    search.placeholder = kind === 'branch' ? 'Find a branch or tag' : 'Find a name or email';
+    show(byId('logFilterPopover'), true);
+    if (kind === 'user') {
+      logAuthorsError = false;
+      post('loadLogAuthors', { root: state.activeRoot, requestId: ++logAuthorRequestId });
+    }
+    renderLogFilterChoices();
+    positionLogFilter(button);
+    search.focus();
   }
 
   const graphColors = [
@@ -541,43 +741,155 @@
     return node;
   }
 
-  function graphCell(rowLayout, graphWidth) {
+  const laneX = (lane) => 9 + lane * 15;
+
+  function graphCell(commit, rowLayout, graphWidth) {
     const cell = element('span', 'graph-cell');
-    const svg = svgNode('svg', { class: 'graph-svg', viewBox: `0 0 ${graphWidth} 30`, 'aria-hidden': 'true' });
-    const x = (lane) => 9 + lane * 15;
-    const path = (definition, color, className = '') => {
+    const svg = svgNode('svg', { class: 'graph-svg', viewBox: `0 0 ${graphWidth} 30`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+    const path = (definition, color, target, child) => {
+      const className = child ? 'parent-line' : '';
       const node = svgNode('path', { d: definition, class: `graph-line ${className}`, stroke: graphColors[color % graphColors.length] });
+      node.dataset.traceTarget = target;
+      if (child) node.dataset.traceChild = child;
       svg.append(node);
+      return node;
     };
     rowLayout.continuations.forEach((connection) => {
-      path(`M ${x(connection.from)} 0 C ${x(connection.from)} 10 ${x(connection.to)} 20 ${x(connection.to)} 30`, connection.color);
+      path(`M ${laneX(connection.from)} 0 C ${laneX(connection.from)} 10 ${laneX(connection.to)} 20 ${laneX(connection.to)} 30`, connection.color, connection.hash)
+        .classList.add('incoming');
     });
-    path(`M ${x(rowLayout.currentLane)} 0 L ${x(rowLayout.currentLane)} 15`, rowLayout.currentColor);
+    if (rowLayout.hasIncoming) {
+      path(`M ${laneX(rowLayout.currentLane)} 0 L ${laneX(rowLayout.currentLane)} 15`, rowLayout.currentColor, commit.hash)
+        .classList.add('incoming');
+    }
     rowLayout.parentConnections.forEach((connection) => {
-      path(`M ${x(rowLayout.currentLane)} 15 C ${x(rowLayout.currentLane)} 21 ${x(connection.to)} 23 ${x(connection.to)} 30`, connection.color, 'parent-line');
+      path(`M ${laneX(rowLayout.currentLane)} 15 C ${laneX(rowLayout.currentLane)} 21 ${laneX(connection.to)} 23 ${laneX(connection.to)} 30`, connection.color, connection.hash, commit.hash);
     });
     svg.append(svgNode('circle', {
       class: `graph-node${rowLayout.merge ? ' merge' : ''}`,
-      cx: x(rowLayout.currentLane),
+      cx: laneX(rowLayout.currentLane),
       cy: 15,
       r: rowLayout.merge ? 5 : 4,
       fill: graphColors[rowLayout.currentColor % graphColors.length],
       stroke: graphColors[rowLayout.currentColor % graphColors.length],
     }));
     cell.append(svg);
+    const trigger = element('button', 'graph-node-trigger');
+    trigger.type = 'button';
+    trigger.dataset.action = 'toggleGraphNode';
+    trigger.dataset.hash = commit.hash;
+    trigger.dataset.logTip = commit.hash;
+    trigger.style.setProperty('--node-x', `${laneX(rowLayout.currentLane)}px`);
+    const expanded = expandedCommit === commit.hash;
+    trigger.title = `${expanded ? 'Collapse' : 'Expand'} commit ${commit.shortHash}`;
+    trigger.setAttribute('aria-label', trigger.title);
+    trigger.setAttribute('aria-expanded', String(expanded));
+    cell.append(trigger);
     return cell;
+  }
+
+  function commitExpansion(commit, layout, graphWidth, visibleHashes) {
+    const details = element('div', 'graph-details');
+    const rails = svgNode('svg', { class: 'graph-details-rails', viewBox: `0 0 ${graphWidth} 100`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+    for (const link of [...layout.continuations, ...layout.parentConnections]) {
+      const x = laneX(link.to);
+      const line = svgNode('line', {
+        class: 'graph-line', x1: x, x2: x, y1: 0, y2: 100,
+        stroke: graphColors[link.color % graphColors.length], 'vector-effect': 'non-scaling-stroke',
+      });
+      line.dataset.traceTarget = link.hash;
+      rails.append(line);
+    }
+    const card = element('div', 'graph-details-card');
+    const heading = element('div', 'graph-details-revision');
+    heading.append(element('code', 'ellipsis', commit.hash));
+    const copy = element('button', '', 'Copy revision');
+    copy.dataset.action = 'copyHash';
+    copy.dataset.hash = commit.hash;
+    heading.append(copy);
+    card.append(heading);
+    if (commit.body) card.append(element('p', 'graph-details-body', commit.body));
+    if (commit.parents.length) {
+      const parents = element('div', 'graph-details-parents');
+      parents.append(element('span', 'muted', commit.parents.length === 1 ? 'Parent' : 'Parents'));
+      for (const parent of commit.parents) {
+        const label = parent.slice(0, commit.shortHash.length);
+        if (visibleHashes.has(parent)) {
+          const link = element('button', '', label);
+          link.dataset.action = 'navigateCommit';
+          link.dataset.hash = parent;
+          link.title = `Go to parent ${label}`;
+          parents.append(link);
+        } else {
+          const labelText = element('code', 'muted', label);
+          labelText.title = 'This parent is outside the displayed history';
+          parents.append(labelText);
+        }
+      }
+      card.append(parents);
+    }
+    details.append(rails, card);
+    return details;
+  }
+
+  function highlightLogTrace(tip, force = false) {
+    if (!force && tip === hoveredLogTip) return;
+    hoveredLogTip = tip;
+    const trace = window.SmartGitLogGraph.traceFirstParent(logCommitsByHash, tip);
+    const list = byId('logList');
+    const highlighting = visibleCommits.some((commit) => trace.has(commit.hash));
+    list.classList.toggle('trace-active', highlighting);
+    let following = false;
+    for (const entry of list.querySelectorAll('.log-entry')) {
+      const hash = entry.dataset.hash;
+      const onTrace = trace.has(hash);
+      const atTip = hash === tip;
+      const wasFollowing = following;
+      following ||= onTrace;
+      const row = entry.querySelector('.commit-row');
+      row.classList.toggle('trace-row', onTrace);
+      row.classList.toggle('trace-tip', atTip);
+      for (const edge of entry.querySelectorAll('[data-trace-target]')) {
+        const { traceTarget, traceChild } = edge.dataset;
+        const connectsTrace = traceChild
+          ? trace.get(traceChild) === traceTarget && trace.has(traceTarget)
+          : (edge.classList.contains('incoming') ? wasFollowing : following) && trace.has(traceTarget);
+        edge.classList.toggle('trace-edge', connectsTrace);
+      }
+    }
   }
 
   function renderLog() {
     const filter = byId('logFilter').value.trim().toLowerCase();
     const list = byId('logList');
-    list.replaceChildren();
-    const commits = state.commits.filter((commit) => !filter || [commit.subject, commit.authorName, commit.hash, ...commit.refs].join(' ').toLowerCase().includes(filter));
-    const layout = window.SmartGitLogGraph?.layoutCommitGraph(commits) || { rows: [], maxLaneCount: 1 };
+    const source = logRef || logAuthor ? filteredCommits : state.commits;
+    const commits = (source || []).filter((commit) => !filter
+      || [commit.subject, commit.authorName, commit.authorEmail, commit.hash, ...commit.refs].join(' ').toLowerCase().includes(filter));
+    visibleCommits = commits;
+    logCommitsByHash = new Map([...state.commits, ...commits].map((commit) => [commit.hash, commit]));
+    const visibleHashes = new Set(commits.map((commit) => commit.hash));
+    if (selectedCommit && !commits.some((commit) => commit.hash === selectedCommit)) {
+      selectedCommit = undefined;
+      clearCommitDetails();
+    }
+    if (!commits.length) {
+      const message = logError || (!source ? 'Loading history…' : filter || logRef || logAuthor ? 'No matching commits' : 'No commits yet');
+      list.replaceChildren(element('div', 'empty', message));
+      highlightLogTrace(hoveredLogTip, true);
+      return;
+    }
+    const { layoutCommitGraph, indexLogBranches, commitRefPresentations } = window.SmartGitLogGraph;
+    const layout = layoutCommitGraph(commits, Boolean(filter || logAuthor));
+    const branchIndex = indexLogBranches(state.branches);
     const graphWidth = Math.max(30, 18 + (layout.maxLaneCount - 1) * 15);
     byId('logTab').style.setProperty('--graph-width', `${graphWidth}px`);
+    const fragment = document.createDocumentFragment();
+    const columns = element('div', 'log-columns');
+    columns.setAttribute('aria-hidden', 'true');
+    columns.append(element('span', '', 'Commit'), element('span', '', 'Author'), element('span', 'commit-date', 'Date'));
+    fragment.append(columns);
     commits.forEach((commit, index) => {
-      const presentations = window.SmartGitLogGraph?.commitRefPresentations(commit, state.branches, state.status) || [];
+      const presentations = commitRefPresentations(commit, state.branches, state.status, branchIndex);
       const isHead = presentations.some((info) => info.type === 'head');
       const row = element('div', `commit-row${selectedCommit === commit.hash ? ' selected' : ''}${isHead ? ' head' : ''}`);
       row.dataset.action = 'showCommit';
@@ -586,31 +898,43 @@
       row.setAttribute('role', 'listitem');
       row.tabIndex = 0;
       row.title = `${commit.shortHash} · ${commit.authorName} <${commit.authorEmail}>\n${humanDate(commit.authoredAt)}${commit.body ? `\n\n${commit.body}` : ''}`;
-      row.append(graphCell(layout.rows[index] || {
-        currentLane: 0,
-        currentColor: 0,
-        continuations: [],
-        parentConnections: [],
-        merge: false,
-      }, graphWidth));
+      const rowLayout = layout.rows[index];
+      row.append(graphCell(commit, rowLayout, graphWidth));
+      const summary = element('span', 'commit-summary');
       const subject = element('span', 'commit-subject', commit.subject);
       subject.title = `${commit.shortHash} ${commit.subject}`;
-      row.append(subject);
-      const refs = element('span', 'commit-refs');
-      presentations.forEach((info) => {
-        const ref = element('span', `ref ${info.type}`);
-        ref.title = info.title;
-        ref.append(element('span', 'ref-icon', info.icon), document.createTextNode(info.label));
-        refs.append(ref);
-      });
-      row.append(refs);
+      summary.append(subject);
+      if (presentations.length) {
+        const refs = element('span', 'commit-refs');
+        refs.title = presentations.map((info) => info.title).join('\n');
+        presentations.forEach((info) => {
+          const ref = element('span', `ref ${info.type}`);
+          ref.dataset.logTip = commit.hash;
+          ref.append(element('span', 'ref-icon', info.icon), element('span', 'ellipsis', info.label));
+          refs.append(ref);
+        });
+        summary.append(refs);
+      }
+      row.append(summary);
       const author = element('span', 'commit-author', commit.authorName);
       author.title = `${commit.authorName} <${commit.authorEmail}>`;
       row.append(author);
       row.append(element('span', 'commit-date', humanDate(commit.authoredAt)));
-      list.append(row);
+      const entry = element('div', 'log-entry');
+      entry.dataset.hash = commit.hash;
+      entry.append(row);
+      if (expandedCommit === commit.hash) entry.append(commitExpansion(commit, rowLayout, graphWidth, visibleHashes));
+      fragment.append(entry);
     });
-    if (!commits.length) list.append(element('div', 'empty', filter ? 'No matching commits' : 'No commits yet'));
+    const previousScroll = list.scrollTop;
+    list.replaceChildren(fragment);
+    list.scrollTop = previousScroll;
+    highlightLogTrace(hoveredLogTip, true);
+  }
+
+  function clearCommitDetails() {
+    show(byId('commitEmpty'), true);
+    show(byId('commitDetails'), false);
   }
 
   function treeNode() {
@@ -754,6 +1078,8 @@
     renderChanges();
     renderConflictResolver();
     renderBranches();
+    updateLogFilterButtons();
+    renderLogFilterChoices();
     renderLog();
     renderConsole();
     setTab(activeTab);
@@ -852,7 +1178,7 @@
         items.push(
           { label: 'Resolve Conflicts', heading: true },
           { label: '  Open Conflict Resolver', action: 'openConflictResolver' },
-          { label: '  Open Merge Editor', action: 'openMerge' },
+          { label: '  Open Smart Git Merge Editor', action: 'openMerge' },
           { label: '  Accept Ours', action: 'useOurs' },
           { label: '  Accept Theirs', action: 'useTheirs' },
           { label: '  Mark Resolved', action: 'markResolved' },
@@ -901,6 +1227,7 @@
       const current = source.dataset.current === 'true';
       const checkedOut = source.dataset.checkedOut === 'true';
       return [
+        { label: 'Filter Log by Branch', action: 'setLogRef', icon: '⑂' },
         ...(!remote && !checkedOut ? [{ label: 'Checkout', action: 'switchBranch', icon: '↪' }] : []),
         { label: 'New Branch from Selected…', action: 'newBranchFromRef', icon: '⑂' },
         { label: 'Copy Branch Name', action: 'copyBranch', icon: '⧉' },
@@ -908,9 +1235,9 @@
       ];
     }
     if (kind === 'commit') {
-      const commit = state.commits.find((entry) => entry.hash === source.dataset.hash);
-      const parent = commit?.parents?.[0];
-      const child = state.commits.find((entry) => entry.parents?.includes(source.dataset.hash));
+      const commit = visibleCommits.find((entry) => entry.hash === source.dataset.hash);
+      const parent = visibleCommits.find((entry) => commit?.parents?.[0] === entry.hash)?.hash;
+      const child = visibleCommits.find((entry) => entry.parents?.includes(source.dataset.hash));
       return [
         { label: `${commit?.shortHash || ''}  ${commit?.subject || 'Commit'}`, heading: true },
         separator(),
@@ -969,8 +1296,8 @@
       if (item.heading) {
         button.disabled = true;
       } else {
-        button.dataset.action = item.action;
         Object.entries(source.dataset).forEach(([key, value]) => { button.dataset[key] = value; });
+        button.dataset.action = item.action;
         if (item.hash) button.dataset.hash = item.hash;
       }
       menu.append(button);
@@ -986,10 +1313,11 @@
   }
 
   function selectCommit(hash) {
-    if (!hash || !state.commits.some((commit) => commit.hash === hash)) return;
+    if (!hash || !visibleCommits.some((commit) => commit.hash === hash)) return;
+    if (selectedCommit !== hash) clearCommitDetails();
     selectedCommit = hash;
+    document.querySelectorAll('.commit-row').forEach((row) => row.classList.toggle('selected', row.dataset.hash === hash));
     post('showCommit', { hash });
-    renderLog();
     document.querySelector(`.commit-row[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
@@ -1070,8 +1398,33 @@
         else collapsedBranchGroups.add(groupId);
         saveUiState();
         renderBranches();
+        byId('branchTree').querySelector(`[data-branch-group="${CSS.escape(groupId)}"]`)?.focus({ preventScroll: true });
         break;
       }
+      case 'setLogRef': {
+        const ref = target.dataset.logRef ?? '';
+        if (logRef === ref) break;
+        applyLogFilters(ref, logAuthor);
+        if (target.closest('#branchTree')) {
+          byId('branchTree').querySelector(`[data-log-ref="${CSS.escape(ref)}"]`)?.focus({ preventScroll: true });
+        }
+        break;
+      }
+      case 'openLogFilter':
+        openLogFilter(target.dataset.filter, target);
+        break;
+      case 'chooseLogFilter': {
+        const kind = openLogFilterType;
+        closeLogFilter(true);
+        if (kind === 'branch') applyLogFilters(target.dataset.logRef ?? '', logAuthor);
+        if (kind === 'user') applyLogFilters(logRef, logAuthors?.[Number(target.dataset.authorIndex)]);
+        break;
+      }
+      case 'clearLogFilters':
+        byId('logFilter').value = '';
+        applyLogFilters('', undefined);
+        byId('logFilter').focus();
+        break;
       case 'openDiff':
         if (path) post('openDiff', { path, staged: target.dataset.staged === 'true' }); break;
       case 'openDiffNew':
@@ -1115,6 +1468,17 @@
       case 'showCommit':
         selectCommit(hash);
         break;
+      case 'toggleGraphNode':
+        if (hash && visibleCommits.some((commit) => commit.hash === hash)) {
+          expandedCommit = expandedCommit === hash ? undefined : hash;
+          renderLog();
+          if (expandedCommit) {
+            selectCommit(hash);
+            byId('logList').querySelector('.graph-details')?.scrollIntoView({ block: 'nearest' });
+          }
+          byId('logList').querySelector(`.graph-node-trigger[data-hash="${CSS.escape(hash)}"]`)?.focus({ preventScroll: true });
+        }
+        break;
       case 'branchFromCommit': if (hash) post('branchFromCommit', { hash }); break;
       case 'tagFromCommit': if (hash) post('tagFromCommit', { hash }); break;
       case 'checkoutCommit': if (hash) post('checkoutCommit', { hash }); break;
@@ -1131,6 +1495,7 @@
   }
 
   document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('#logFilterPopover, [data-action="openLogFilter"]')) closeLogFilter();
     const resizer = event.target.closest('.pane-resizer');
     if (resizer) beginPaneResize(event, resizer);
     const menu = byId('contextMenu');
@@ -1187,9 +1552,7 @@
       if (selectedChangeKeys.has(changeKey(descriptor))) activateSelectedChange(descriptor);
       else selectChange(descriptor);
     } else if (source.dataset.context === 'commit' && source.dataset.hash) {
-      selectedCommit = source.dataset.hash;
-      document.querySelectorAll('.commit-row').forEach((row) => row.classList.toggle('selected', row === source));
-      post('showCommit', { hash: selectedCommit });
+      selectCommit(source.dataset.hash);
     }
     openContextMenu(source, event.clientX, event.clientY);
   });
@@ -1209,6 +1572,24 @@
   });
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && openLogFilterType) {
+      event.preventDefault();
+      closeLogFilter(true);
+      return;
+    }
+    if (openLogFilterType && event.target.closest('#logFilterPopover')) {
+      const options = [...byId('logFilterChoices').querySelectorAll('button')];
+      const index = options.indexOf(event.target);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const next = event.key === 'ArrowDown' ? options[index + 1] : options[index - 1];
+        (next || byId('logChoiceSearch')).focus();
+      } else if (event.key === 'Enter' && event.target === byId('logChoiceSearch')) {
+        event.preventDefault();
+        options[0]?.click();
+      }
+      return;
+    }
     const resizer = event.target.closest('.pane-resizer');
     if (resizer && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       event.preventDefault();
@@ -1230,6 +1611,13 @@
       );
       applyLogPaneWidths();
       saveUiState();
+      return;
+    }
+    const branchGroup = event.target.closest('[data-branch-group]');
+    if (branchGroup && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !byId('branchFilter').value.trim()) {
+      event.preventDefault();
+      const shouldExpand = event.key === 'ArrowRight';
+      if ((branchGroup.getAttribute('aria-expanded') === 'true') !== shouldExpand) branchGroup.click();
       return;
     }
     if (event.key === 'Escape') {
@@ -1257,17 +1645,60 @@
     }
   });
 
-  window.addEventListener('blur', closeContextMenu);
+  window.addEventListener('blur', () => {
+    closeContextMenu();
+    closeLogFilter();
+    highlightLogTrace();
+  });
+  window.addEventListener('resize', () => {
+    if (openLogFilterType) {
+      positionLogFilter(byId(openLogFilterType === 'branch' ? 'logBranchButton' : 'logUserButton'));
+    }
+  });
   document.addEventListener('scroll', closeContextMenu, true);
 
   byId('repository').addEventListener('change', (event) => post('selectRepository', { root: event.target.value }));
-  byId('logFilter').addEventListener('input', renderLog);
+  byId('logFilter').addEventListener('input', () => {
+    updateLogFilterButtons();
+    clearTimeout(logSearchTimer);
+    logSearchTimer = setTimeout(renderLog, 90);
+  });
   byId('branchFilter').addEventListener('input', renderBranches);
+  byId('logChoiceSearch').addEventListener('input', renderLogFilterChoices);
+  const logTipAt = (target) => target instanceof Element ? target.closest('[data-log-tip]')?.dataset.logTip : undefined;
+  byId('logTab').addEventListener('pointerover', (event) => {
+    if (event.pointerType !== 'touch') highlightLogTrace(logTipAt(event.target));
+  });
+  byId('logTab').addEventListener('pointerout', (event) => {
+    if (event.pointerType !== 'touch') highlightLogTrace(logTipAt(event.relatedTarget));
+  });
+  byId('logTab').addEventListener('focusin', (event) => highlightLogTrace(logTipAt(event.target)));
+  byId('logTab').addEventListener('focusout', (event) => highlightLogTrace(logTipAt(event.relatedTarget)));
 
   window.addEventListener('message', (event) => {
     const message = event.data;
     if (message.type === 'state') {
+      const rootChanged = state.activeRoot !== message.state.activeRoot;
       state = message.state;
+      if (rootChanged) {
+        closeLogFilter();
+        logRef = '';
+        logAuthor = undefined;
+        logAuthors = undefined;
+        logAuthorsError = false;
+        selectedCommit = undefined;
+        expandedCommit = undefined;
+        hoveredLogTip = undefined;
+        clearCommitDetails();
+        byId('branchFilter').value = '';
+        byId('logFilter').value = '';
+      } else if (logRef && (logRef === 'HEAD'
+        ? !headChoice()
+        : !logRefGroups().some((group) => group.choices.some((choice) => choice.ref === logRef)))) {
+        logRef = '';
+        filteredCommits = undefined;
+      }
+      if (activeTab === 'log') requestLog(true);
       fileIcons = message.fileIcons || {};
       previewRequestKey = undefined;
       render();
@@ -1275,23 +1706,32 @@
       show(byId('loading'), message.value && !state.status);
     } else if (message.type === 'diffPreview') {
       if (!selectedChange || message.path === selectedChange.path) renderDiffPreview(message);
+    } else if (message.type === 'logResult') {
+      if (message.root !== state.activeRoot || message.requestId !== logRequestId) return;
+      filteredCommits = message.commits;
+      logError = message.error || '';
+      renderLog();
+    } else if (message.type === 'logAuthors') {
+      if (message.root !== state.activeRoot || message.requestId !== logAuthorRequestId) return;
+      logAuthors = message.authors;
+      logAuthorsError = Boolean(message.error);
+      renderLogFilterChoices();
     } else if (message.type === 'commitDetails') {
-      selectedCommit = message.hash;
+      if (message.root !== state.activeRoot || message.hash !== selectedCommit) return;
       fileIcons = { ...fileIcons, ...(message.fileIcons || {}) };
       byId('detailsTitle').textContent = message.title;
       byId('detailsBody').textContent = message.details;
       renderCommitFiles(message.files || [], message.hash);
       show(byId('commitEmpty'), false);
       show(byId('commitDetails'), true);
-      renderLog();
     } else if (message.type === 'appendCommit') {
       if (message.commit && !state.commits.some((commit) => commit.hash === message.commit.hash)) {
         state.commits.push(message.commit);
-        state.commits.sort((left, right) => Date.parse(right.authoredAt) - Date.parse(left.authoredAt));
         renderLog();
       }
     } else if (message.type === 'revealCommit') {
       byId('logFilter').value = '';
+      applyLogFilters('', undefined);
       setTab('log');
       selectCommit(message.hash);
     } else if (message.type === 'consoleEntry') {

@@ -80,6 +80,16 @@ export interface GitBranch {
   committedAt?: string;
 }
 
+export interface GitTag {
+  ref: string;
+  name: string;
+}
+
+export interface GitAuthor {
+  name: string;
+  email: string;
+}
+
 export type GitOperation = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect';
 
 export interface RepositorySummary {

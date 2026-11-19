@@ -5,6 +5,7 @@ import { parseBlamePorcelain } from './blame';
 import { parseBranches, parseLog, parsePorcelainV2 } from './parsers';
 import type { GitBlameLine } from './blame';
 import type {
+  GitAuthor,
   GitBranch,
   GitCommit,
   GitCommitFile,
@@ -13,7 +14,16 @@ import type {
   GitConflictState,
   GitOperation,
   GitStatus,
+  GitTag,
 } from './types';
+
+const LOG_FORMAT = '--pretty=format:%H%x00%h%x00%P%x00%aN%x00%aE%x00%aI%x00%D%x00%s%x00%b%x1e';
+const HISTORY_REFS = ['--exclude=refs/stash', '--all'];
+
+interface LogOptions {
+  ref?: string;
+  author?: GitAuthor;
+}
 
 interface RunOptions {
   allowFailure?: boolean;
@@ -171,16 +181,33 @@ export class GitRepository {
     return parseBlamePorcelain(result.stdout);
   }
 
-  public async log(limit: number): Promise<GitCommit[]> {
+  public async log(limit: number, { ref, author }: LogOptions = {}): Promise<GitCommit[]> {
+    const authorOptions: string[] = [];
+    if (author) {
+      const identity = `${author.name} <${author.email}>`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      authorOptions.push('--extended-regexp', '--use-mailmap', `--author=^${identity}$`);
+    }
     const result = await this.run([
       'log',
       `--max-count=${limit}`,
       '--topo-order',
       '--date=iso-strict',
       '--decorate=short',
-      '--pretty=format:%H%x00%h%x00%P%x00%an%x00%ae%x00%aI%x00%D%x00%s%x00%b%x1e',
-    ], { allowFailure: true });
-    return result.exitCode === 0 ? parseLog(result.stdout) : [];
+      '--decorate-refs-exclude=refs/stash',
+      LOG_FORMAT,
+      ...authorOptions,
+      ...(ref ? ['--end-of-options', ref] : HISTORY_REFS),
+      '--',
+    ]);
+    return parseLog(result.stdout);
+  }
+
+  public async logAuthors(): Promise<GitAuthor[]> {
+    const result = await this.run(['shortlog', '-se', ...HISTORY_REFS, '--'], { input: '' });
+    return result.stdout.split('\n').flatMap((line) => {
+      const match = /^\s*\d+\t(.*) <([^<>]*)>$/.exec(line);
+      return match ? [{ name: match[1] ?? '', email: match[2] ?? '' }] : [];
+    });
   }
 
   public async commitByHash(hash: string): Promise<GitCommit | undefined> {
@@ -189,7 +216,7 @@ export class GitRepository {
       '--no-patch',
       '--date=iso-strict',
       '--decorate=short',
-      '--pretty=format:%H%x00%h%x00%P%x00%an%x00%ae%x00%aI%x00%D%x00%s%x00%b%x1e',
+      LOG_FORMAT,
       hash,
     ], { allowFailure: true });
     return result.exitCode === 0 ? parseLog(result.stdout)[0] : undefined;
@@ -210,6 +237,11 @@ export class GitRepository {
       'refs/remotes',
     ]);
     return parseBranches(result.stdout);
+  }
+
+  public async tags(): Promise<GitTag[]> {
+    const result = await this.run(['for-each-ref', '--format=%(refname)', 'refs/tags']);
+    return result.stdout.split('\n').filter(Boolean).map((ref) => ({ ref, name: ref.slice('refs/tags/'.length) }));
   }
 
   public async commitDetails(hash: string): Promise<string> {

@@ -13,8 +13,9 @@ interface GraphLayout {
   maxLaneCount: number;
 }
 
-const { layoutCommitGraph } = require('../../media/logGraph.js') as {
-  layoutCommitGraph(commits: Array<{ hash: string; parents: string[] }>): GraphLayout;
+const { layoutCommitGraph, traceFirstParent, commitRefPresentations, resizeLogPanes } = require('../../media/logGraph.js') as {
+  layoutCommitGraph(commits: Array<{ hash: string; parents: string[] }>, hideMissingParents?: boolean): GraphLayout;
+  traceFirstParent(commits: Map<string, { parents: string[] }>, tip: string): Map<string, string | undefined>;
   commitRefPresentations(
     commit: { hash: string; refs: string[] },
     branches: Array<{ hash: string; name: string; current: boolean; remote: boolean; worktreePath?: string }>,
@@ -27,21 +28,6 @@ const { layoutCommitGraph } = require('../../media/logGraph.js') as {
     side: 'left' | 'right',
     requestedWidth: number,
   ): { left: number; right: number };
-};
-
-const { commitRefPresentations, resizeLogPanes } = require('../../media/logGraph.js') as {
-  commitRefPresentations: (
-    commit: { hash: string; refs: string[] },
-    branches: Array<{ hash: string; name: string; current: boolean; remote: boolean; worktreePath?: string }>,
-    status: { oid?: string },
-  ) => Array<{ label: string; type: string; title: string }>;
-  resizeLogPanes: (
-    containerWidth: number,
-    currentLeft: number,
-    currentRight: number,
-    side: 'left' | 'right',
-    requestedWidth: number,
-  ) => { left: number; right: number };
 };
 
 test('layoutCommitGraph creates and rejoins lanes for a merge history', () => {
@@ -68,6 +54,30 @@ test('layoutCommitGraph keeps a linear history in one lane', () => {
 
   assert.equal(layout.maxLaneCount, 1);
   assert.deepEqual(layout.rows.map((row) => row.currentLane), [0, 0, 0]);
+});
+
+test('filtered history ends lanes whose parents are hidden', () => {
+  const layout = layoutCommitGraph([
+    { hash: 'merge', parents: ['hidden', 'visible'] },
+    { hash: 'visible', parents: ['also-hidden'] },
+  ], true);
+
+  assert.equal(layout.maxLaneCount, 1);
+  assert.equal(layout.rows[0]?.merge, true);
+  assert.equal(layout.rows[0]?.parentConnections.length, 1);
+  assert.equal(layout.rows[1]?.parentConnections.length, 0);
+});
+
+test('branch hover follows first-parent history across merges and stops outside the loaded range', () => {
+  const commits = new Map([
+    ['merge', { parents: ['main', 'feature'] }],
+    ['main', { parents: ['base'] }],
+    ['feature', { parents: ['base'] }],
+    ['base', { parents: ['unloaded'] }],
+  ]);
+  assert.deepEqual([...traceFirstParent(commits, 'merge')], [['merge', 'main'], ['main', 'base'], ['base', 'unloaded']]);
+  assert.deepEqual([...traceFirstParent(commits, 'feature')], [['feature', 'base'], ['base', 'unloaded']]);
+  assert.equal(traceFirstParent(commits, 'unloaded').size, 0);
 });
 
 test('commit refs distinguish current, slash-named local, remote, worktree, and tag refs', () => {
